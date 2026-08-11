@@ -17,7 +17,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# تطبيق CSS مخصص
+# تطبيق CSS مخصص للألوان والواجهات
 st.markdown("""
     <style>
     .main { background-color: #f8f9fa; }
@@ -112,7 +112,7 @@ def ensure_database_integrity():
         'Catalog': pd.DataFrame(columns=['Item_Code', 'System_Item_Name', 'Default_Unit']),
         'Preferences': pd.DataFrame(columns=['Customer_Name', 'Mapped_System_Item']),
         'Synonyms': pd.DataFrame(columns=['WhatsApp_Term', 'System_Item_Name', 'Customer_Name', 'Rule_Type']),
-        'Examples': pd.DataFrame(columns=['Raw_WhatsApp', 'Expected_JSON']),
+        'Examples': pd.DataFrame(columns=['Customer_Name', 'Raw_WhatsApp', 'Expected_JSON', 'Timestamp']),
         'Users': pd.DataFrame([{'Username': 'ali', 'Password': 'admin123', 'Role': 'Admin', 'Status': 'Active'}]),
         'Logs': pd.DataFrame(columns=['Timestamp', 'Date', 'Username', 'Customer_Name', 'Items_Count', 'Status'])
     }
@@ -191,25 +191,29 @@ st.markdown(f"""
     </div>
 """, unsafe_allow_html=True)
 
-# مفتاح API والتحكم في القائمة الجانبية
+# 🔒 إدارة مفتاح API (ظاهر للأدمن فقط ومخفي عن الموظفين)
 initial_key = load_saved_api_key()
-api_key = st.sidebar.text_input("مفتاح Gemini API:", value=initial_key, type="password")
-
-if st.sidebar.button("💾 حفظ المفتاح كافتراضي"):
-    if api_key.strip():
-        save_api_key_locally(api_key.strip())
-        st.sidebar.success("✅ تم حفظ المفتاح بنجاح!")
-    else:
-        st.sidebar.warning("يرجى إدخال المفتاح أولاً.")
+if st.session_state.get("user_role") == "Admin":
+    st.sidebar.markdown("### ⚙️ إعدادات الأدمن")
+    api_key = st.sidebar.text_input("مفتاح Gemini API:", value=initial_key, type="password")
+    if st.sidebar.button("💾 حفظ المفتاح كافتراضي"):
+        if api_key.strip():
+            save_api_key_locally(api_key.strip())
+            st.sidebar.success("✅ تم حفظ المفتاح بنجاح!")
+        else:
+            st.sidebar.warning("يرجى إدخال المفتاح أولاً.")
+else:
+    api_key = initial_key
 
 if st.sidebar.button("🚪 تسجيل الخروج"):
     st.session_state["authenticated"] = False
     st.rerun()
 
-# 7. دالة الاستعلام عن النماذج الفعالة ديناميكياً وحصرياً من خوادم جوجل
+# 7. دالة الاستعلام عن النماذج الفعالة الرسمية والمتاحة
 def fetch_active_models(key):
+    default_models = ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash']
     if not key:
-        return ['gemini-2.0-flash']
+        return default_models
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key.strip()}"
     try:
         r = requests.get(url, timeout=10)
@@ -220,14 +224,11 @@ def fetch_active_models(key):
                 for m in models_data 
                 if 'generateContent' in m.get('supportedGenerationMethods', [])
             ]
-            # ترتيب النماذج المتاحة فعلياً لحسابك
-            priority_list = ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash']
-            ordered = [m for m in priority_list if m in valid_models]
-            # إرجاع الموديلات المتاحة حسابك فقط
-            return ordered if ordered else (valid_models if valid_models else ['gemini-2.0-flash'])
+            ordered = [m for m in default_models if m in valid_models]
+            return ordered if ordered else (valid_models if valid_models else default_models)
     except Exception:
         pass
-    return ['gemini-2.0-flash']
+    return default_models
 
 # 🔒 8. محرك المطابقة والمادة الاحتياطية (Strict Matcher & Fallback)
 def process_and_match_locally(raw_df, df_cat, df_syn, current_customer):
@@ -370,27 +371,48 @@ with tab_order:
     if st.button("🚀 تحليل الطلب وإنشاء الفاتورة", type="primary"):
         clean_key = api_key.strip()
         if not clean_key:
-            st.warning("يرجى إدخال مفتاح Gemini API بالشريط الجانبي.")
+            st.warning("يرجى التأكد من إدراج مفتاح Gemini API بواسطة الأدمن.")
         elif not order_text and not uploaded_image:
             st.warning("يرجى وضع نص أو صورة الطلب أولاً.")
         else:
-            cust_prefs = df_prefs[df_prefs['Customer_Name'] == selected_customer]['Mapped_System_Item'].dropna().tolist()
-            combined_context_items = list(dict.fromkeys(cust_prefs + sys_catalog_names))
-            cust_prefs_str = "\n".join([f"- {item}" for item in combined_context_items[:200]])
-            
-            synonyms_rules = []
-            for idx, r in df_synonyms.iterrows():
-                c_name = str(r.get('Customer_Name', 'جميع العملاء'))
-                if c_name in ['جميع العملاء', 'عام', selected_customer]:
-                    synonyms_rules.append(f"• الكلمة '{r['WhatsApp_Term']}' تعني حتماً: '{r['System_Item_Name']}'")
-            synonyms_str = "\n".join(synonyms_rules)
-            
-            prompt = f"""
+            # ⏳ تفعيل مؤشر التقدم والتجهيز
+            with st.spinner("⏳ جاري تحليل الفاتورة ومطابقة المواد بالذكاء الاصطناعي..."):
+                cust_prefs = df_prefs[df_prefs['Customer_Name'] == selected_customer]['Mapped_System_Item'].dropna().tolist()
+                combined_context_items = list(dict.fromkeys(cust_prefs + sys_catalog_names))
+                cust_prefs_str = "\n".join([f"- {item}" for item in combined_context_items[:200]])
+                
+                synonyms_rules = []
+                for idx, r in df_synonyms.iterrows():
+                    c_name = str(r.get('Customer_Name', 'جميع العملاء'))
+                    if c_name in ['جميع العملاء', 'عام', selected_customer]:
+                        synonyms_rules.append(f"• الكلمة '{r['WhatsApp_Term']}' تعني حتماً: '{r['System_Item_Name']}'")
+                synonyms_str = "\n".join(synonyms_rules)
+                
+                few_shot_str = ""
+                if not df_examples.empty:
+                    relevant_examples = df_examples[
+                        df_examples['Customer_Name'].isin([selected_customer, 'جميع العملاء'])
+                    ].tail(3)
+                    
+                    if not relevant_examples.empty:
+                        few_shot_blocks = []
+                        for _, ex in relevant_examples.iterrows():
+                            few_shot_blocks.append(
+                                f"📌 **مثال واقعي سابق لـ ({ex['Customer_Name']}):**\n"
+                                f"نص الواتساب الخام:\n{ex['Raw_WhatsApp']}\n"
+                                f"النتيجة المعتمدة بالسستم:\n{ex['Expected_JSON']}\n"
+                            )
+                        few_shot_str = "\n".join(few_shot_blocks)
+
+                prompt = f"""
 أنت مساعد مبيعات محترف ومسؤول عن قراءة ومطابقة طلبيات الواتساب.
 العميل المحدد: **{selected_customer}**
 
 🧠 قواعد الذاكرة والمترادفات المعتمدة:
 {synonyms_str if synonyms_str else "لا يوجد قواعد خاصة بعد."}
+
+📖 أمثلة حية سابقة لفواتير مكتملة ومطابقة 100% لأسلوبك المعتمد:
+{few_shot_str if few_shot_str else "لا توجد أمثلة كاملة سابقة بعد."}
 
 📋 قائمة الأصناف المعتمدة بالسستم:
 {cust_prefs_str}
@@ -403,67 +425,66 @@ with tab_order:
   {{"System_Item_Name": "اسم المادة الكامل مع الكود بنفس السطر", "Quantity": 1, "Unit": "الوحدة"}}
 ]
 """
-            headers = {'Content-Type': 'application/json'}
-            if input_type == "نص مباشر من الواتساب":
-                contents_payload = [{"parts": [{"text": prompt + f"\n\nنص الطلب الكامل:\n{order_text}"}]}]
-            else:
-                image_bytes = uploaded_image.getvalue()
-                base64_image = base64.b64encode(image_bytes).decode('utf-8')
-                mime_type = uploaded_image.type
-                contents_payload = [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": mime_type, "data": base64_image}}]}]
-            
-            payload = {"contents": contents_payload, "generationConfig": {"maxOutputTokens": 8192}}
-            candidate_models = fetch_active_models(clean_key)
-            
-            success = False
-            last_debug_err = ""
-            
-            for m_name in candidate_models:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={clean_key}"
-                try:
-                    res = requests.post(url, headers=headers, json=payload, timeout=45)
-                    if res.status_code == 200:
-                        res_text = res.json()['candidates'][0]['content']['parts'][0]['text']
-                        
-                        if "```json" in res_text:
-                            json_data = res_text.split("```json")[1].split("```")[0].strip()
-                        elif "```" in res_text:
-                            json_data = res_text.split("```")[1].split("```")[0].strip()
-                        else:
-                            json_data = res_text.strip()
+                headers = {'Content-Type': 'application/json'}
+                if input_type == "نص مباشر من الواتساب":
+                    contents_payload = [{"parts": [{"text": prompt + f"\n\nنص الطلب الكامل:\n{order_text}"}]}]
+                else:
+                    image_bytes = uploaded_image.getvalue()
+                    base64_image = base64.b64encode(image_bytes).decode('utf-8')
+                    mime_type = uploaded_image.type
+                    contents_payload = [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": mime_type, "data": base64_image}}]}]
+                
+                payload = {"contents": contents_payload, "generationConfig": {"maxOutputTokens": 8192}}
+                candidate_models = fetch_active_models(clean_key)
+                
+                success = False
+                last_debug_err = ""
+                
+                for m_name in candidate_models:
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={clean_key}"
+                    try:
+                        res = requests.post(url, headers=headers, json=payload, timeout=45)
+                        if res.status_code == 200:
+                            res_text = res.json()['candidates'][0]['content']['parts'][0]['text']
                             
-                        parsed_list = json.loads(json_data)
-                        df_raw = pd.DataFrame(parsed_list)
+                            if "```json" in res_text:
+                                json_data = res_text.split("```json")[1].split("```")[0].strip()
+                            elif "```" in res_text:
+                                json_data = res_text.split("```")[1].split("```")[0].strip()
+                            else:
+                                json_data = res_text.strip()
+                                
+                            parsed_list = json.loads(json_data)
+                            df_raw = pd.DataFrame(parsed_list)
+                            
+                            df_result, questions = process_and_match_locally(df_raw, df_catalog, df_synonyms, selected_customer)
+                            
+                            st.session_state["last_result"] = df_result
+                            st.session_state["last_questions"] = questions
+                            
+                            log_entry = pd.DataFrame([{
+                                'Timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                'Date': datetime.now().strftime("%Y-%m-%d"),
+                                'Username': st.session_state['current_user'],
+                                'Customer_Name': selected_customer,
+                                'Items_Count': len(df_result),
+                                'Status': 'Success'
+                            }])
+                            updated_logs = pd.concat([df_logs, log_entry])
+                            with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
+                                updated_logs.to_excel(writer, sheet_name='Logs', index=False)
+                            
+                            sync_excel_to_github(f"تسجيل عملية طلبية جديدة لـ {selected_customer}")
+                            st.success(f"✅ تم تحليل الفاتورة بنجاح بواسطة الموديل ({m_name})! (المجموع: {len(df_result)} صنف)")
+                            success = True
+                            break
+                        else:
+                            last_debug_err = f"رمز الاستجابة ({res.status_code}) من الموديل {m_name}:\n{res.text}"
+                    except Exception as ex:
+                        last_debug_err = f"خطأ بالاتصال: {str(ex)}"
                         
-                        df_result, questions = process_and_match_locally(df_raw, df_catalog, df_synonyms, selected_customer)
-                        
-                        st.session_state["last_result"] = df_result
-                        st.session_state["last_questions"] = questions
-                        
-                        # تسجيل الحركة في الـ Logs وحفظها
-                        log_entry = pd.DataFrame([{
-                            'Timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            'Date': datetime.now().strftime("%Y-%m-%d"),
-                            'Username': st.session_state['current_user'],
-                            'Customer_Name': selected_customer,
-                            'Items_Count': len(df_result),
-                            'Status': 'Success'
-                        }])
-                        updated_logs = pd.concat([df_logs, log_entry])
-                        with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-                            updated_logs.to_excel(writer, sheet_name='Logs', index=False)
-                        
-                        sync_excel_to_github(f"تسجيل عملية طلبية جديدة لـ {selected_customer}")
-                        st.success(f"✅ تم تحليل الفاتورة بنجاح بواسطة الموديل ({m_name})! (المجموع: {len(df_result)} صنف)")
-                        success = True
-                        break
-                    else:
-                        last_debug_err = f"رمز الاستجابة ({res.status_code}) من الموديل {m_name}:\n{res.text}"
-                except Exception as ex:
-                    last_debug_err = f"خطأ بالاتصال: {str(ex)}"
-                    
-            if not success:
-                st.error(f"❌ تعذر تحليل الطلب. التفاصيل المباشرة للخطأ:\n\n```\n{last_debug_err}\n```")
+                if not success:
+                    st.error(f"❌ تعذر تحليل الطلب. التفاصيل المباشرة للخطأ:\n\n```\n{last_debug_err}\n```")
 
     # عرض نتائج الجدول المجهزة للنسخ والتحرير
     if "last_result" in st.session_state:
@@ -509,27 +530,39 @@ with tab_order:
 with tab_learn:
     st.subheader("🎓 مركز تدريب وتحديث ذاكرة النظام")
     
-    t_l1, t_l2, t_l3, t_l4 = st.tabs(["💬 توجيهات سريعة (سوالف)", "💡 تصحيح إملاء / مطعم", "➕ إضافة صنف جديد للكتالوج", "📚 القواعد والأمثلة الحية"])
+    t_l1, t_l2, t_l3, t_l4, t_l5 = st.tabs([
+        "💬 توجيهات سريعة (سوالف)", 
+        "💡 تصحيح إملاء / مطعم", 
+        "📑 أمثلة فواتير كاملة (بالجملة)",
+        "➕ إضافة صنف جديد للكتالوج", 
+        "📚 القواعد والأمثلة المحفوظة"
+    ])
     
-    # 1. التوجيه السريع
+    # 1. التوجيه السريع (محدث باختيار العميل أو لجميع العملاء)
     with t_l1:
         st.markdown("اكتب توجيهك المباشر للنظام بلغتك البسيطة وسيتم حفظه فوراً بالذاكرة:")
-        quick_wa = st.text_input("الكلمة / المادة بالواتساب (مثال: زيت بروسر):")
-        quick_sys = st.selectbox("الصنف الرسمي المقابل بالسستم:", sys_catalog_names, key="q_sys_box")
+        col_q1, col_q2, col_q3 = st.columns([2, 2, 3])
+        with col_q1:
+            quick_target = st.selectbox("النطاق / العميل:", ['جميع العملاء'] + customers_list, key="q_target_box")
+        with col_q2:
+            quick_wa = st.text_input("الكلمة / المادة بالواتساب (مثال: زيت بروسر):")
+        with col_q3:
+            quick_sys = st.selectbox("الصنف الرسمي المقابل بالسستم:", sys_catalog_names, key="q_sys_box")
+            
         if st.button("💾 حفظ التوجيه السريع"):
             if quick_wa:
                 new_rule = pd.DataFrame([{
                     'WhatsApp_Term': quick_wa.strip().lower(),
                     'System_Item_Name': quick_sys.strip(),
-                    'Customer_Name': 'جميع العملاء',
+                    'Customer_Name': quick_target,
                     'Rule_Type': 'توجيه سريع'
                 }])
                 updated_syn = pd.concat([df_synonyms, new_rule]).drop_duplicates(subset=['WhatsApp_Term', 'Customer_Name'], keep='last')
                 with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
                     updated_syn.to_excel(writer, sheet_name='Synonyms', index=False)
-                sync_excel_to_github(f"إضافة توجيه سريع: {quick_wa.strip()}")
+                sync_excel_to_github(f"إضافة توجيه سريع لـ {quick_target}: {quick_wa.strip()}")
                 st.cache_data.clear()
-                st.success("✅ تم حفظ التوجيه وتزامنه دائمياً على GitHub!")
+                st.success(f"✅ تم حفظ التوجيه لـ ({quick_target}) وتزامنه دائمياً على GitHub!")
                 st.rerun()
 
     # 2. تصحيح إملاء / مطعم
@@ -557,8 +590,66 @@ with tab_learn:
                 st.success("✅ تم حفظ القاعدة بنجاح!")
                 st.rerun()
 
-    # 3. إضافة صنف جديد للكتالوج
+    # 3. قسم أمثلة الفواتير الكاملة بالجملة
     with t_l3:
+        st.markdown("### 📑 إضافة مثال فاتورة كاملة لتدريب النظام (Few-Shot Training)")
+        st.info("💡 **طريقة الاستخدام:** الصق رسالة الواتساب الكاملة (مثلاً 20 صنف)، والصق أمامها الجدول الصحيح المنسوخ من الإكسيل أو السستم لتثبيت أسلوب المطابقة لهذا المطعم.")
+        
+        ex_cust = st.selectbox("اختر العميل / المطعم الموجه له المثال:", ['جميع العملاء'] + customers_list, key="ex_cust_sel")
+        
+        c_ex1, c_ex2 = st.columns(2)
+        with c_ex1:
+            ex_wa_text = st.text_area("1. الصق رسالة الواتساب الخام للطلب الكامل:", height=220, placeholder="مثال:\nعايزين 2 زيت بروسر\n5 طحين زيرو\n1 معجون طماطم كرتون")
+        with c_ex2:
+            ex_pasted_table = st.text_area(
+                "2. الصق جدول الفاتورة المعتمدة (انسخه مباشرة من الإكسيل):", 
+                height=220, 
+                placeholder="اسم المادة بالسستم\tالكمية\tالوحدة\nزيت بروسر نقي 1.5 لتر (402)\t2\tكرتون\nطحين زيرو أبيض 25 كيلو (105)\t5\tكيس"
+            )
+            
+        if st.button("💾 حفظ مثال الفاتورة الكاملة لتدريب النظام"):
+            if ex_wa_text.strip() and ex_pasted_table.strip():
+                try:
+                    lines = ex_pasted_table.strip().split('\n')
+                    items_list = []
+                    for line in lines:
+                        parts = [p.strip() for p in line.split('\t') if p.strip()]
+                        if len(parts) >= 2:
+                            item_name = parts[0]
+                            qty = parts[1] if parts[1].isdigit() else 1
+                            unit = parts[2] if len(parts) >= 3 else 'قطعة'
+                            items_list.append({
+                                "System_Item_Name": item_name,
+                                "Quantity": float(qty) if str(qty).replace('.', '', 1).isdigit() else 1,
+                                "Unit": unit
+                            })
+                    
+                    if items_list:
+                        json_str = json.dumps(items_list, ensure_ascii=False)
+                        new_example = pd.DataFrame([{
+                            'Customer_Name': ex_cust,
+                            'Raw_WhatsApp': ex_wa_text.strip(),
+                            'Expected_JSON': json_str,
+                            'Timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        }])
+                        
+                        updated_examples = pd.concat([df_examples, new_example])
+                        with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
+                            updated_examples.to_excel(writer, sheet_name='Examples', index=False)
+                        
+                        sync_excel_to_github(f"إضافة مثال فاتورة كاملة لـ {ex_cust}")
+                        st.cache_data.clear()
+                        st.success(f"✅ تم حفظ مثال الفاتورة ({len(items_list)} صنف) وتدريب الذكاء الاصطناعي عليه بنجاح!")
+                        st.rerun()
+                    else:
+                        st.error("❌ تعذر قراءة الأعمدة من النص المنسوخ. تأكد من نسخ الأعمدة من الإكسيل مباشرة.")
+                except Exception as ex_err:
+                    st.error(f"❌ حدث خطأ أثناء معالجة الجدول المنسوخ: {str(ex_err)}")
+            else:
+                st.warning("يرجى ملء نص الواتساب وجدول الفاتورة قبل الحفظ.")
+
+    # 4. إضافة صنف جديد للكتالوج
+    with t_l4:
         st.markdown("إضافة مادة جديدة كلياً لكتالوج النظام:")
         ca1, ca2, ca3 = st.columns([2, 3, 2])
         with ca1:
@@ -583,9 +674,16 @@ with tab_learn:
                 st.success(f"✅ تم إضافة الصنف '{full_sys_item_name}' وتحديث GitHub بنجاح!")
                 st.rerun()
 
-    # 4. سجل القواعد والأمثلة
-    with t_l4:
+    # 5. سجل القواعد والأمثلة المحفوظة
+    with t_l5:
+        st.subheader("📚 قواعد القاموس والمترادفات:")
         st.dataframe(df_synonyms, use_container_width=True)
+        st.markdown("---")
+        st.subheader("📑 أمثلة الفواتير الكاملة المحفوظة:")
+        if not df_examples.empty:
+            st.dataframe(df_examples, use_container_width=True)
+        else:
+            st.info("لا توجد أمثلة كاملة محفوظة بعد.")
 
 # 📊 التبويب الثالث: تقرير 4 عصراً اليومي
 with tab_report:
