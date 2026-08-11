@@ -17,7 +17,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# تطبيق CSS مخصص للألوان الهادئة والتصميم المودرن
+# تطبيق CSS مخصص
 st.markdown("""
     <style>
     .main { background-color: #f8f9fa; }
@@ -206,9 +206,9 @@ if st.sidebar.button("🚪 تسجيل الخروج"):
     st.session_state["authenticated"] = False
     st.rerun()
 
-# 7. دالة الاستعلام عن النماذج الفعالة المعتمدة
+# 7. دالة الاستعلام عن النماذج الفعالة المعتمدة حصراً
 def fetch_active_models(key):
-    preferred_order = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-1.5-pro']
+    preferred_order = ['gemini-2.0-flash', 'gemini-1.5-flash']
     if not key:
         return preferred_order
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key.strip()}"
