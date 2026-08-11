@@ -206,22 +206,28 @@ if st.sidebar.button("🚪 تسجيل الخروج"):
     st.session_state["authenticated"] = False
     st.rerun()
 
-# 7. دالة الاستعلام عن النماذج الفعالة المعتمدة حصراً
+# 7. دالة الاستعلام عن النماذج الفعالة ديناميكياً وحصرياً من خوادم جوجل
 def fetch_active_models(key):
-    preferred_order = ['gemini-2.0-flash', 'gemini-1.5-flash']
     if not key:
-        return preferred_order
+        return ['gemini-2.0-flash']
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key.strip()}"
     try:
-        r = requests.get(url, timeout=8)
+        r = requests.get(url, timeout=10)
         if r.status_code == 200:
             models_data = r.json().get('models', [])
-            valid_models = [m['name'].replace('models/', '') for m in models_data if 'generateContent' in m.get('supportedGenerationMethods', [])]
-            ordered = [m for m in preferred_order if m in valid_models]
-            return ordered if ordered else preferred_order
+            valid_models = [
+                m['name'].replace('models/', '') 
+                for m in models_data 
+                if 'generateContent' in m.get('supportedGenerationMethods', [])
+            ]
+            # ترتيب النماذج المتاحة فعلياً لحسابك
+            priority_list = ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash']
+            ordered = [m for m in priority_list if m in valid_models]
+            # إرجاع الموديلات المتاحة حسابك فقط
+            return ordered if ordered else (valid_models if valid_models else ['gemini-2.0-flash'])
     except Exception:
         pass
-    return preferred_order
+    return ['gemini-2.0-flash']
 
 # 🔒 8. محرك المطابقة والمادة الاحتياطية (Strict Matcher & Fallback)
 def process_and_match_locally(raw_df, df_cat, df_syn, current_customer):
