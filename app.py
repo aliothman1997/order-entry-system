@@ -326,16 +326,24 @@ def process_and_match_locally(raw_df, df_cat, df_syn, current_customer):
     raw_df['Notes'] = final_notes
     return raw_df, uncertain_questions
 
-# 📱 9. التبويبات الرئيسية للنظام
+# 📱 9. التبويبات الرئيسية للنظام (إظهار التقرير واللوحة للأدمن فقط)
 customers_list = sorted(df_prefs['Customer_Name'].dropna().unique().tolist()) if not df_prefs.empty else ["عميل عام"]
 sys_catalog_names = sorted(df_catalog['System_Item_Name'].dropna().unique().tolist()) if not df_catalog.empty else []
 
-tab_order, tab_learn, tab_report, tab_admin = st.tabs([
-    "📝 1. إدخال الطلب والنسخ", 
-    "🎓 2. مركز التعلم والذاكرة", 
-    "📊 3. تقرير 4 عصراً اليومي", 
-    "⚙️ 4. لوحة تحكم الأدمن"
-])
+if st.session_state.get("user_role") == "Admin":
+    tab_order, tab_learn, tab_report, tab_admin = st.tabs([
+        "📝 1. إدخال الطلب والنسخ", 
+        "🎓 2. مركز التعلم والذاكرة", 
+        "📊 3. تقرير 4 عصراً اليومي", 
+        "⚙️ 4. لوحة تحكم الأدمن"
+    ])
+else:
+    tab_order, tab_learn = st.tabs([
+        "📝 1. إدخال الطلب والنسخ", 
+        "🎓 2. مركز التعلم والذاكرة"
+    ])
+    tab_report = None
+    tab_admin = None
 
 # 📝 التبويب الأول: إدخال وتفكيك الطلب
 with tab_order:
@@ -388,7 +396,6 @@ with tab_order:
                         synonyms_rules.append(f"• الكلمة '{r['WhatsApp_Term']}' تعني حتماً: '{r['System_Item_Name']}'")
                 synonyms_str = "\n".join(synonyms_rules)
                 
-                # إتاحة التعلم من حتى 10 فواتير سابقة محددة لهذا المطعم
                 few_shot_str = ""
                 if not df_examples.empty:
                     relevant_examples = df_examples[
@@ -622,7 +629,7 @@ with tab_learn:
                 st.success("✅ تم حفظ القاعدة بنجاح!")
                 st.rerun()
 
-    # 📑 3. قسم أمثلة الفواتير الكاملة بالجملة (مع معاينة وتأكيد وإمكانية إضافة حتى 200+ فاتورة)
+    # 📑 3. قسم أمثلة الفواتير الكاملة بالجملة
     with t_l3:
         st.markdown("### 📑 إضافة مثال فاتورة كاملة لتدريب النظام (Few-Shot Training)")
         st.info("💡 **طريقة الاستخدام:** الصق رسالة الواتساب الكاملة، والصق أمامها الجدول الصحيح المنسوخ من الإكسيل لتثبيت أسلوب المطابقة لهذا المطعم.")
@@ -663,7 +670,6 @@ with tab_learn:
             else:
                 st.warning("يرجى ملء نص الواتساب وجدول الفاتورة قبل المعاينة.")
 
-        # عرض شاشة المعاينة للتأكد قبل الحفظ
         if "preview_items" in st.session_state and st.session_state["preview_items"]:
             st.markdown("---")
             st.warning("⚠️ **تنبيه مهم للتدريب:** يرجى مراجعة الجدول والنص أدناه للتأكد من المحتوى، حيث سيتعلم الذكاء الاصطناعي من هذه الفاتورة بشكل مباشر:")
@@ -685,7 +691,6 @@ with tab_learn:
                 sync_excel_to_github(f"إضافة مثال فاتورة كاملة لـ {st.session_state['preview_cust']}")
                 st.cache_data.clear()
                 
-                # إخفاء المعاينة وتفريغ الشاشة
                 del st.session_state["preview_items"]
                 del st.session_state["preview_cust"]
                 del st.session_state["preview_wa"]
@@ -731,36 +736,34 @@ with tab_learn:
         else:
             st.info("لا توجد أمثلة كاملة محفوظة بعد.")
 
-# 📊 التبويب الثالث: تقرير 4 عصراً اليومي
-with tab_report:
-    st.subheader("📊 ملخص وتقرير الحركة اليومي (حتى الساعة 4:00 عصراً)")
-    
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    today_logs = df_logs[df_logs['Date'] == today_str] if not df_logs.empty else pd.DataFrame()
-    
-    col_m1, col_m2, col_m3 = st.columns(3)
-    with col_m1:
-        st.metric("إجمالي الفواتير المنجزة اليوم", len(today_logs))
-    with col_m2:
-        st.metric("إجمالي المواد المعالجة اليوم", int(today_logs['Items_Count'].sum()) if not today_logs.empty else 0)
-    with col_m3:
-        st.metric("عدد القواعد والتحديثات المكتسبة", len(df_synonyms))
+# 📊 التبويب الثالث: تقرير 4 عصراً اليومي (متاح للأدمن فقط)
+if tab_report is not None:
+    with tab_report:
+        st.subheader("📊 ملخص وتقرير الحركة اليومي (حتى الساعة 4:00 عصراً)")
         
-    st.markdown("---")
-    st.subheader("📋 تفاصيل الحركة حسب الموظفين اليوم:")
-    if not today_logs.empty:
-        st.dataframe(today_logs, use_container_width=True)
-    else:
-        st.info("لا توجد طلبيات معالجة اليوم بعد.")
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        today_logs = df_logs[df_logs['Date'] == today_str] if not df_logs.empty else pd.DataFrame()
+        
+        col_m1, col_m2, col_m3 = st.columns(3)
+        with col_m1:
+            st.metric("إجمالي الفواتير المنجزة اليوم", len(today_logs))
+        with col_m2:
+            st.metric("إجمالي المواد المعالجة اليوم", int(today_logs['Items_Count'].sum()) if not today_logs.empty else 0)
+        with col_m3:
+            st.metric("عدد القواعد والتحديثات المكتسبة", len(df_synonyms))
+            
+        st.markdown("---")
+        st.subheader("📋 تفاصيل الحركة حسب الموظفين اليوم:")
+        if not today_logs.empty:
+            st.dataframe(today_logs, use_container_width=True)
+        else:
+            st.info("لا توجد طلبيات معالجة اليوم بعد.")
 
-# ⚙️ التبويب الرابع: لوحة تحكم الأدمن (مع حذفيات الفواتير والقواعد الخاطئة)
-with tab_admin:
-    if st.session_state["user_role"] != "Admin":
-        st.warning("🔒 هذه اللوحة مخصصة للأدمن فقط.")
-    else:
+# ⚙️ التبويب الرابع: لوحة تحكم الأدمن (متاحة للأدمن فقط)
+if tab_admin is not None:
+    with tab_admin:
         st.subheader("⚙️ لوحة إدارة المستخدمين والعمليات والذاكرة (خاص بالأدمن)")
         
-        # 🗑️ قسم إدارة وحذف أمثلة الفواتير الخاطئة
         st.markdown("### 🗑️ إدارة وحذف أمثلة الفواتير المحفوظة (لتصحيح أخطاء التدريب):")
         if not df_examples.empty:
             st.dataframe(df_examples[['Customer_Name', 'Timestamp', 'Raw_WhatsApp']], use_container_width=True)
@@ -794,7 +797,6 @@ with tab_admin:
 
         st.markdown("---")
         
-        # 🗑️ قسم إدارة وحذف قواعد القاموس والمترادفات الخاطئة
         st.markdown("### 🗑️ إدارة وحذف قواعد القاموس والمترادفات الخاطئة:")
         if not df_synonyms.empty:
             st.dataframe(df_synonyms, use_container_width=True)
