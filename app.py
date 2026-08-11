@@ -17,7 +17,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# تطبيق CSS مخصص للألوان والواجهات
+# تطبيق CSS مخصص
 st.markdown("""
     <style>
     .main { background-color: #f8f9fa; }
@@ -209,11 +209,11 @@ if st.sidebar.button("🚪 تسجيل الخروج"):
     st.session_state["authenticated"] = False
     st.rerun()
 
-# 7. دالة الاستعلام عن النماذج الفعالة الرسمية والمتاحة
+# 7. دالة الاستعلام عن النماذج الفعالة (تقديم الموديلات القوية واستبعاد الـ Lite من البداية)
 def fetch_active_models(key):
-    default_models = ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash']
+    preferred_order = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.0-flash-lite']
     if not key:
-        return default_models
+        return preferred_order
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key.strip()}"
     try:
         r = requests.get(url, timeout=10)
@@ -224,11 +224,11 @@ def fetch_active_models(key):
                 for m in models_data 
                 if 'generateContent' in m.get('supportedGenerationMethods', [])
             ]
-            ordered = [m for m in default_models if m in valid_models]
-            return ordered if ordered else (valid_models if valid_models else default_models)
+            ordered = [m for m in preferred_order if m in valid_models]
+            return ordered if ordered else preferred_order
     except Exception:
         pass
-    return default_models
+    return preferred_order
 
 # 🔒 8. محرك المطابقة والمادة الاحتياطية (Strict Matcher & Fallback)
 def process_and_match_locally(raw_df, df_cat, df_syn, current_customer):
@@ -375,11 +375,10 @@ with tab_order:
         elif not order_text and not uploaded_image:
             st.warning("يرجى وضع نص أو صورة الطلب أولاً.")
         else:
-            # ⏳ تفعيل مؤشر التقدم والتجهيز
-            with st.spinner("⏳ جاري تحليل الفاتورة ومطابقة المواد بالذكاء الاصطناعي..."):
+            with st.spinner("⏳ جاري تحليل الفاتورة ومطابقة جميع المواد بالذكاء الاصطناعي..."):
                 cust_prefs = df_prefs[df_prefs['Customer_Name'] == selected_customer]['Mapped_System_Item'].dropna().tolist()
                 combined_context_items = list(dict.fromkeys(cust_prefs + sys_catalog_names))
-                cust_prefs_str = "\n".join([f"- {item}" for item in combined_context_items[:200]])
+                cust_prefs_str = "\n".join([f"- {item}" for item in combined_context_items[:300]])
                 
                 synonyms_rules = []
                 for idx, r in df_synonyms.iterrows():
@@ -405,7 +404,7 @@ with tab_order:
                         few_shot_str = "\n".join(few_shot_blocks)
 
                 prompt = f"""
-أنت مساعد مبيعات محترف ومسؤول عن قراءة ومطابقة طلبيات الواتساب.
+أنت مساعد مبيعات محترف ومسؤول عن قراءة ومطابقة طلبيات الواتساب بالكامل.
 العميل المحدد: **{selected_customer}**
 
 🧠 قواعد الذاكرة والمترادفات المعتمدة:
@@ -417,10 +416,11 @@ with tab_order:
 📋 قائمة الأصناف المعتمدة بالسستم:
 {cust_prefs_str}
 
-**تعليمات حازمة:**
-1. استخرج **جميع** الأصناف دون حذف أي بند.
-2. طابق الصنف مع الاسم الرسمي الكامل كما هو مسجل بالكتالوج شاملاً الأكواد والأقواس في نفس السطر تماماً دون فصل الكود عن اسم المادة.
-3. أخرج النتيجة **فقط** على شكل مصفوفة JSON محاطة بـ ```json و ```:
+**تعليمات حازمة جداً:**
+1. اقرأ واستخرج **كافة الأصناف والبنود** المذكورة في النص من السطر الأول وحتى السطر الأخير بدون استثناء.
+2. يمنع منعا باتا اختصار القائمة أو الاكتفاء بعنصر واحد فقط. إذا كان الطلب يحتوي على 15 بنداً، يجب أن تخرج مصفوفة تحتوي على 15 كائناً بالضبط.
+3. طابق الصنف مع الاسم الرسمي الكامل كما هو مسجل بالكتالوج شاملاً الأكواد والأقواس في نفس السطر تماماً.
+4. أخرج النتيجة **فقط** على شكل مصفوفة JSON محاطة بـ ```json و ```:
 [
   {{"System_Item_Name": "اسم المادة الكامل مع الكود بنفس السطر", "Quantity": 1, "Unit": "الوحدة"}}
 ]
@@ -434,7 +434,14 @@ with tab_order:
                     mime_type = uploaded_image.type
                     contents_payload = [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": mime_type, "data": base64_image}}]}]
                 
-                payload = {"contents": contents_payload, "generationConfig": {"maxOutputTokens": 8192}}
+                # إتاحة المعالجة بضبط درجة الحرارة صفر لمنع الاختصار
+                payload = {
+                    "contents": contents_payload, 
+                    "generationConfig": {
+                        "maxOutputTokens": 8192,
+                        "temperature": 0.0
+                    }
+                }
                 candidate_models = fetch_active_models(clean_key)
                 
                 success = False
