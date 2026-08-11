@@ -224,7 +224,6 @@ def fetch_active_models(key):
                 for m in models_data 
                 if 'generateContent' in m.get('supportedGenerationMethods', [])
             ]
-            # فلترة واستبعاد الموديلات الخفيفة والمقتطعة
             full_models = [m for m in valid_models if 'lite' not in m.lower() and '8b' not in m.lower()]
             ordered = [m for m in default_models if m in full_models]
             return ordered if ordered else (full_models if full_models else default_models)
@@ -389,11 +388,12 @@ with tab_order:
                         synonyms_rules.append(f"• الكلمة '{r['WhatsApp_Term']}' تعني حتماً: '{r['System_Item_Name']}'")
                 synonyms_str = "\n".join(synonyms_rules)
                 
+                # إتاحة التعلم من حتى 10 فواتير سابقة محددة لهذا المطعم
                 few_shot_str = ""
                 if not df_examples.empty:
                     relevant_examples = df_examples[
                         df_examples['Customer_Name'].isin([selected_customer, 'جميع العملاء'])
-                    ].tail(3)
+                    ].tail(10)
                     
                     if not relevant_examples.empty:
                         few_shot_blocks = []
@@ -419,7 +419,7 @@ with tab_order:
 {cust_prefs_str}
 
 **تعليمات حازمة جداً:**
-1. قم بعدّ واستخراج **جميع الأصناف والبنود المذكورة بالكامل** من السطر الأول إلى السطر الأخير بدون حذف أو اختصار أي صنف.
+1. قم بعدّ واستخرج **جميع الأصناف والبنود المذكورة بالكامل** من السطر الأول إلى السطر الأخير بدون حذف أو اختصار أي صنف.
 2. يمنع منعاً باتاً الاكتفاء بعدد محدد أو حذف أي مادة. إذا احتوت الرسالة على 15 مادة، يجب أن تكون النتيجة تحتوي على 15 عنصراً بالضبط.
 3. طابق الصنف مع الاسم الرسمي الكامل كما هو مسجل بالكتالوج شاملاً الأكواد والأقواس في نفس السطر تماماً.
 4. أخرج النتيجة **فقط** على شكل مصفوفة JSON محاطة بـ ```json و ```:
@@ -500,7 +500,6 @@ with tab_order:
         st.subheader("📋 جدول الفاتورة النهائي:")
         st.dataframe(df_res, use_container_width=True)
         
-        # إعداد النص المفرغ للنسخ المباشر بالسستم
         copy_text = ""
         for idx, r in df_res.iterrows():
             copy_text += f"{r['System_Item_Name']}\t{r['Quantity']}\t{r['Unit']}\n"
@@ -508,7 +507,6 @@ with tab_order:
         st.markdown("---")
         st.subheader("📥 خيارات التحميل والنسخ السريع:")
         
-        # أزرار تنزيل الملفات CSV و Excel
         c_dl1, c_dl2 = st.columns(2)
         with c_dl1:
             csv_data = df_res.to_csv(index=False).encode('utf-8-sig')
@@ -531,12 +529,10 @@ with tab_order:
                 use_container_width=True
             )
             
-        # نص مفرغ بـ 1-Click Copy المباشر
         st.subheader("📋 نص مفرغ للنسخ المباشر بالسستم (Copy to Clipboard):")
         st.caption("💡 يمكنك ضغطة واحدة على زر النسخ المباشر في الزاوية العلوية اليمنى للمربع أدناه لنسخ الجدول كاملاً ولصقه بالسستم مباشرة:")
         st.code(copy_text, language="text")
         
-        # ❓ أسئلة الموظف الافتراضي لتعليم السستم
         if st.session_state.get("last_questions"):
             st.info("❓ **استفسار من الموظف الافتراضي لتعليم النظام:**")
             for q in st.session_state["last_questions"]:
@@ -626,24 +622,20 @@ with tab_learn:
                 st.success("✅ تم حفظ القاعدة بنجاح!")
                 st.rerun()
 
-    # 3. قسم أمثلة الفواتير الكاملة بالجملة
+    # 📑 3. قسم أمثلة الفواتير الكاملة بالجملة (مع معاينة وتأكيد وإمكانية إضافة حتى 200+ فاتورة)
     with t_l3:
         st.markdown("### 📑 إضافة مثال فاتورة كاملة لتدريب النظام (Few-Shot Training)")
-        st.info("💡 **طريقة الاستخدام:** الصق رسالة الواتساب الكاملة (مثلاً 20 صنف)، والصق أمامها الجدول الصحيح المنسوخ من الإكسيل أو السستم لتثبيت أسلوب المطابقة لهذا المطعم.")
+        st.info("💡 **طريقة الاستخدام:** الصق رسالة الواتساب الكاملة، والصق أمامها الجدول الصحيح المنسوخ من الإكسيل لتثبيت أسلوب المطابقة لهذا المطعم.")
         
         ex_cust = st.selectbox("اختر العميل / المطعم الموجه له المثال:", ['جميع العملاء'] + customers_list, key="ex_cust_sel")
         
         c_ex1, c_ex2 = st.columns(2)
         with c_ex1:
-            ex_wa_text = st.text_area("1. الصق رسالة الواتساب الخام للطلب الكامل:", height=220, placeholder="مثال:\nعايزين 2 زيت بروسر\n5 طحين زيرو\n1 معجون طماطم كرتون")
+            ex_wa_text = st.text_area("1. الصق رسالة الواتساب الخام للطلب الكامل:", height=200, key="ex_wa_input", placeholder="مثال:\nعايزين 2 زيت بروسر\n5 طحين زيرو\n1 معجون طماطم كرتون")
         with c_ex2:
-            ex_pasted_table = st.text_area(
-                "2. الصق جدول الفاتورة المعتمدة (انسخه مباشرة من الإكسيل):", 
-                height=220, 
-                placeholder="اسم المادة بالسستم\tالكمية\tالوحدة\nزيت بروسر نقي 1.5 لتر (402)\t2\tكرتون\nطحين زيرو أبيض 25 كيلو (105)\t5\tكيس"
-            )
+            ex_pasted_table = st.text_area("2. الصق جدول الفاتورة المعتمدة (انسخه من الإكسيل):", height=200, key="ex_table_input", placeholder="اسم المادة بالسستم\tالكمية\tالوحدة\nزيت بروسر نقي 1.5 لتر (402)\t2\tكرتون\nطحين زيرو أبيض 25 كيلو (105)\t5\tكيس")
             
-        if st.button("💾 حفظ مثال الفاتورة الكاملة لتدريب النظام"):
+        if st.button("🔍 معاينة وتحليل الفاتورة قبل الحفظ"):
             if ex_wa_text.strip() and ex_pasted_table.strip():
                 try:
                     lines = ex_pasted_table.strip().split('\n')
@@ -652,37 +644,55 @@ with tab_learn:
                         parts = [p.strip() for p in line.split('\t') if p.strip()]
                         if len(parts) >= 2:
                             item_name = parts[0]
-                            qty = parts[1] if parts[1].isdigit() else 1
+                            qty = parts[1]
                             unit = parts[2] if len(parts) >= 3 else 'قطعة'
                             items_list.append({
                                 "System_Item_Name": item_name,
                                 "Quantity": float(qty) if str(qty).replace('.', '', 1).isdigit() else 1,
                                 "Unit": unit
                             })
-                    
                     if items_list:
-                        json_str = json.dumps(items_list, ensure_ascii=False)
-                        new_example = pd.DataFrame([{
-                            'Customer_Name': ex_cust,
-                            'Raw_WhatsApp': ex_wa_text.strip(),
-                            'Expected_JSON': json_str,
-                            'Timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        }])
-                        
-                        updated_examples = pd.concat([df_examples, new_example])
-                        with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-                            updated_examples.to_excel(writer, sheet_name='Examples', index=False)
-                        
-                        sync_excel_to_github(f"إضافة مثال فاتورة كاملة لـ {ex_cust}")
-                        st.cache_data.clear()
-                        st.success(f"✅ تم حفظ مثال الفاتورة ({len(items_list)} صنف) وتدريب الذكاء الاصطناعي عليه بنجاح!")
-                        st.rerun()
+                        st.session_state["preview_items"] = items_list
+                        st.session_state["preview_cust"] = ex_cust
+                        st.session_state["preview_wa"] = ex_wa_text.strip()
+                        st.success("✅ تم تحليل الجدول بنجاح! راجع البيانات أدناه وتأكد منها قبل الحفظ النهائي.")
                     else:
-                        st.error("❌ تعذر قراءة الأعمدة من النص المنسوخ. تأكد من نسخ الأعمدة من الإكسيل مباشرة.")
+                        st.error("❌ تعذر قراءة الأعمدة من الجدول المنسوخ. تأكد من نسخ الأعمدة من الإكسيل مباشرة.")
                 except Exception as ex_err:
-                    st.error(f"❌ حدث خطأ أثناء معالجة الجدول المنسوخ: {str(ex_err)}")
+                    st.error(f"❌ حدث خطأ أثناء القراءة: {str(ex_err)}")
             else:
-                st.warning("يرجى ملء نص الواتساب وجدول الفاتورة قبل الحفظ.")
+                st.warning("يرجى ملء نص الواتساب وجدول الفاتورة قبل المعاينة.")
+
+        # عرض شاشة المعاينة للتأكد قبل الحفظ
+        if "preview_items" in st.session_state and st.session_state["preview_items"]:
+            st.markdown("---")
+            st.warning("⚠️ **تنبيه مهم للتدريب:** يرجى مراجعة الجدول والنص أدناه للتأكد من المحتوى، حيث سيتعلم الذكاء الاصطناعي من هذه الفاتورة بشكل مباشر:")
+            st.dataframe(pd.DataFrame(st.session_state["preview_items"]), use_container_width=True)
+            
+            if st.button("💾 تأكيد وحفظ الفاتورة بالذاكرة لتعليم النظام النهائي", type="primary"):
+                json_str = json.dumps(st.session_state["preview_items"], ensure_ascii=False)
+                new_example = pd.DataFrame([{
+                    'Customer_Name': st.session_state["preview_cust"],
+                    'Raw_WhatsApp': st.session_state["preview_wa"],
+                    'Expected_JSON': json_str,
+                    'Timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }])
+                
+                updated_examples = pd.concat([df_examples, new_example]).reset_index(drop=True)
+                with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
+                    updated_examples.to_excel(writer, sheet_name='Examples', index=False)
+                
+                sync_excel_to_github(f"إضافة مثال فاتورة كاملة لـ {st.session_state['preview_cust']}")
+                st.cache_data.clear()
+                
+                # إخفاء المعاينة وتفريغ الشاشة
+                del st.session_state["preview_items"]
+                del st.session_state["preview_cust"]
+                del st.session_state["preview_wa"]
+                
+                st.success("✅ تم حفظ الفاتورة بنجاح! وسوف يتعلم السيستم منها تلقائياً عند معالجة طلبات هذا المطعم.")
+                time.sleep(1.5)
+                st.rerun()
 
     # 4. إضافة صنف جديد للكتالوج
     with t_l4:
@@ -743,12 +753,79 @@ with tab_report:
     else:
         st.info("لا توجد طلبيات معالجة اليوم بعد.")
 
-# ⚙️ التبويب الرابع: لوحة تحكم الأدمن
+# ⚙️ التبويب الرابع: لوحة تحكم الأدمن (مع حذفيات الفواتير والقواعد الخاطئة)
 with tab_admin:
     if st.session_state["user_role"] != "Admin":
         st.warning("🔒 هذه اللوحة مخصصة للأدمن فقط.")
     else:
-        st.subheader("⚙️ لوحة إدارة المستخدمين والصلاحيات عن بُعد")
+        st.subheader("⚙️ لوحة إدارة المستخدمين والعمليات والذاكرة (خاص بالأدمن)")
+        
+        # 🗑️ قسم إدارة وحذف أمثلة الفواتير الخاطئة
+        st.markdown("### 🗑️ إدارة وحذف أمثلة الفواتير المحفوظة (لتصحيح أخطاء التدريب):")
+        if not df_examples.empty:
+            st.dataframe(df_examples[['Customer_Name', 'Timestamp', 'Raw_WhatsApp']], use_container_width=True)
+            
+            example_options = []
+            for idx, row in df_examples.iterrows():
+                c_name = row.get('Customer_Name', 'غير معروف')
+                ts = row.get('Timestamp', '')
+                raw_snippet = str(row.get('Raw_WhatsApp', ''))[:30].replace('\n', ' ')
+                label = f"مثال {idx+1}: [{c_name}] - ({ts}) - {raw_snippet}..."
+                example_options.append((idx, label))
+            
+            selected_ex_idx = st.selectbox(
+                "اختر مثال الفاتورة المراد حذفه نهائياً من الذاكرة:",
+                options=[opt[0] for opt in example_options],
+                format_func=lambda x: [opt[1] for opt in example_options if opt[0] == x][0],
+                key="select_ex_delete"
+            )
+            
+            if st.button("❌ حذف مثال الفاتورة المحدد نهائياً"):
+                updated_examples = df_examples.drop(index=selected_ex_idx).reset_index(drop=True)
+                with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
+                    updated_examples.to_excel(writer, sheet_name='Examples', index=False)
+                
+                sync_excel_to_github(f"حذف مثال فاتورة رقم {selected_ex_idx+1}")
+                st.cache_data.clear()
+                st.success("✅ تم حذف الفاتورة الخاطئة وتحديث الذاكرة على GitHub بنجاح!")
+                st.rerun()
+        else:
+            st.info("لا توجد أمثلة فواتير محفوظة لحذفها حالياً.")
+
+        st.markdown("---")
+        
+        # 🗑️ قسم إدارة وحذف قواعد القاموس والمترادفات الخاطئة
+        st.markdown("### 🗑️ إدارة وحذف قواعد القاموس والمترادفات الخاطئة:")
+        if not df_synonyms.empty:
+            st.dataframe(df_synonyms, use_container_width=True)
+            syn_options = []
+            for idx, row in df_synonyms.iterrows():
+                c_name = row.get('Customer_Name', 'عام')
+                term = row.get('WhatsApp_Term', '')
+                sys_item = row.get('System_Item_Name', '')
+                label = f"قاعدة {idx+1}: [{c_name}] الكلمة '{term}' -> '{sys_item}'"
+                syn_options.append((idx, label))
+                
+            selected_syn_idx = st.selectbox(
+                "اختر القاعدة المراد حذفها نهائياً:",
+                options=[opt[0] for opt in syn_options],
+                format_func=lambda x: [opt[1] for opt in syn_options if opt[0] == x][0],
+                key="select_syn_delete"
+            )
+            
+            if st.button("❌ حذف القاعدة المحفوظة"):
+                updated_syn = df_synonyms.drop(index=selected_syn_idx).reset_index(drop=True)
+                with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
+                    updated_syn.to_excel(writer, sheet_name='Synonyms', index=False)
+                
+                sync_excel_to_github(f"حذف قاعدة قاموس رقم {selected_syn_idx+1}")
+                st.cache_data.clear()
+                st.success("✅ تم حذف القاعدة الخاطئة بنجاح!")
+                st.rerun()
+        else:
+            st.info("لا توجد قواعد قاموس محفوظة حالياً.")
+
+        st.markdown("---")
         
         st.markdown("### ➕ إضافة موظف جديد (حد أقصى 3 مستخدمين):")
         cad1, cad2, cad3 = st.columns(3)
