@@ -209,27 +209,30 @@ if st.sidebar.button("🚪 تسجيل الخروج"):
     st.session_state["authenticated"] = False
     st.rerun()
 
-# 7. دالة الاستعلام عن النماذج (حصر القائمة على الموديلات الأساسية الثابتة فقط)
+# 7. دالة الكشف الديناميكي عن الموديلات المتاحة فعلياً لحسابك من جوجل
 def fetch_active_models(key):
-    # استخدام الموديلين المعتمدين والمضمونين فقط بدون أي لايت أو موديل تجريبي
-    preferred_order = ['gemini-2.0-flash', 'gemini-1.5-flash']
     if not key:
-        return preferred_order
+        return []
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key.strip()}"
     try:
         r = requests.get(url, timeout=10)
         if r.status_code == 200:
             models_data = r.json().get('models', [])
+            # استخراج جميع النماذج التي تدعم generateContent المتاحة لحسابك حقيقة
             valid_models = [
                 m['name'].replace('models/', '') 
                 for m in models_data 
                 if 'generateContent' in m.get('supportedGenerationMethods', [])
             ]
-            ordered = [m for m in preferred_order if m in valid_models]
-            return ordered if ordered else preferred_order
+            if valid_models:
+                # ترتيب الموديلات: إعطاء الأولوية لموديلات flash ثم باقي الموديلات المتاحة
+                flash_models = [m for m in valid_models if 'flash' in m.lower()]
+                other_models = [m for m in valid_models if 'flash' not in m.lower()]
+                return flash_models + other_models
     except Exception:
         pass
-    return preferred_order
+    # في حال فشل الاتصال، استخدام اسم المعيار العام بدون فرض موديلات قديمة
+    return ['gemini-1.5-flash-latest']
 
 # 🔒 8. محرك المطابقة والمادة الاحتياطية (Strict Matcher & Fallback)
 def process_and_match_locally(raw_df, df_cat, df_syn, current_customer):
