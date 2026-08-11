@@ -209,30 +209,28 @@ if st.sidebar.button("🚪 تسجيل الخروج"):
     st.session_state["authenticated"] = False
     st.rerun()
 
-# 7. دالة الكشف الديناميكي عن الموديلات المتاحة فعلياً لحسابك من جوجل
+# 7. دالة الكشف الفعلي عن الموديلات القوية واستبعاد النماذج الخفيفة (Lite & 8b)
 def fetch_active_models(key):
+    default_models = ['gemini-2.0-flash', 'gemini-1.5-flash']
     if not key:
-        return []
+        return default_models
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key.strip()}"
     try:
         r = requests.get(url, timeout=10)
         if r.status_code == 200:
             models_data = r.json().get('models', [])
-            # استخراج جميع النماذج التي تدعم generateContent المتاحة لحسابك حقيقة
             valid_models = [
                 m['name'].replace('models/', '') 
                 for m in models_data 
                 if 'generateContent' in m.get('supportedGenerationMethods', [])
             ]
-            if valid_models:
-                # ترتيب الموديلات: إعطاء الأولوية لموديلات flash ثم باقي الموديلات المتاحة
-                flash_models = [m for m in valid_models if 'flash' in m.lower()]
-                other_models = [m for m in valid_models if 'flash' not in m.lower()]
-                return flash_models + other_models
+            # فلترة واستبعاد الموديلات الخفيفة والمقتطعة
+            full_models = [m for m in valid_models if 'lite' not in m.lower() and '8b' not in m.lower()]
+            ordered = [m for m in default_models if m in full_models]
+            return ordered if ordered else (full_models if full_models else default_models)
     except Exception:
         pass
-    # في حال فشل الاتصال، استخدام اسم المعيار العام بدون فرض موديلات قديمة
-    return ['gemini-1.5-flash-latest']
+    return default_models
 
 # 🔒 8. محرك المطابقة والمادة الاحتياطية (Strict Matcher & Fallback)
 def process_and_match_locally(raw_df, df_cat, df_syn, current_customer):
@@ -421,8 +419,8 @@ with tab_order:
 {cust_prefs_str}
 
 **تعليمات حازمة جداً:**
-1. اقرأ واستخرج **كافة الأصناف والبنود** المذكورة في النص من السطر الأول وحتى السطر الأخير بدون استثناء.
-2. يمنع منعا باتا اختصار القائمة أو الاكتفاء بعنصر واحد فقط. إذا كان الطلب يحتوي على عدة بنود، يجب أن تخرج مصفوفة تحتوي على جميع البنود المذكورة.
+1. قم بعدّ واستخراج **جميع الأصناف والبنود المذكورة بالكامل** من السطر الأول إلى السطر الأخير بدون حذف أو اختصار أي صنف.
+2. يمنع منعاً باتاً الاكتفاء بعدد محدد أو حذف أي مادة. إذا احتوت الرسالة على 15 مادة، يجب أن تكون النتيجة تحتوي على 15 عنصراً بالضبط.
 3. طابق الصنف مع الاسم الرسمي الكامل كما هو مسجل بالكتالوج شاملاً الأكواد والأقواس في نفس السطر تماماً.
 4. أخرج النتيجة **فقط** على شكل مصفوفة JSON محاطة بـ ```json و ```:
 [
@@ -496,18 +494,46 @@ with tab_order:
                 if not success:
                     st.error(f"❌ تعذر تحليل الطلب. التفاصيل المباشرة للخطأ:\n\n```\n{last_debug_err}\n```")
 
-    # عرض نتائج الجدول المجهزة للنسخ والتحرير
+    # عرض نتائج الجدول المجهزة للنسخ والتحرير بجميع الصيغ
     if "last_result" in st.session_state:
         df_res = st.session_state["last_result"]
         st.subheader("📋 جدول الفاتورة النهائي:")
         st.dataframe(df_res, use_container_width=True)
         
-        # 📋 خيار نسخ الجدول المباشر بدون إكسيل
+        # إعداد النص المفرغ للنسخ المباشر بالسستم
         copy_text = ""
         for idx, r in df_res.iterrows():
             copy_text += f"{r['System_Item_Name']}\t{r['Quantity']}\t{r['Unit']}\n"
         
+        st.markdown("---")
+        st.subheader("📥 خيارات التحميل والنسخ السريع:")
+        
+        # أزرار تنزيل الملفات CSV و Excel
+        c_dl1, c_dl2 = st.columns(2)
+        with c_dl1:
+            csv_data = df_res.to_csv(index=False).encode('utf-8-sig')
+            st.download_button(
+                label="📥 تنزيل الفاتورة ملف CSV",
+                data=csv_data,
+                file_name=f"Invoice_{selected_customer}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+        with c_dl2:
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                df_res.to_excel(writer, index=False, sheet_name='Invoice')
+            st.download_button(
+                label="📊 تنزيل الفاتورة ملف Excel",
+                data=buffer.getvalue(),
+                file_name=f"Invoice_{selected_customer}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+            
+        # نص مفرغ بـ 1-Click Copy المباشر
         st.subheader("📋 نص مفرغ للنسخ المباشر بالسستم (Copy to Clipboard):")
+        st.caption("💡 يمكنك ضغطة واحدة على زر النسخ المباشر في الزاوية العلوية اليمنى للمربع أدناه لنسخ الجدول كاملاً ولصقه بالسستم مباشرة:")
         st.code(copy_text, language="text")
         
         # ❓ أسئلة الموظف الافتراضي لتعليم السستم
