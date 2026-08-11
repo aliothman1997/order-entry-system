@@ -17,7 +17,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# تطبيق CSS مخصص
+# تطبيق CSS مخصص للألوان الهادئة والتصميم المودرن
 st.markdown("""
     <style>
     .main { background-color: #f8f9fa; }
@@ -66,11 +66,9 @@ def sync_excel_to_github(commit_message="تحديث بيانات النظام ت
     }
 
     try:
-        # جلب الـ SHA الخاص بالملف الحالي من جيت هاب
         get_res = requests.get(url, headers=headers, timeout=10)
         sha = get_res.json().get("sha", "") if get_res.status_code == 200 else ""
 
-        # قراءة وتشفير الملف المحلي
         with open(EXCEL_PATH, "rb") as f:
             content_b64 = base64.b64encode(f.read()).decode('utf-8')
 
@@ -208,23 +206,22 @@ if st.sidebar.button("🚪 تسجيل الخروج"):
     st.session_state["authenticated"] = False
     st.rerun()
 
-# 7. دالة الاستعلام عن النماذج الفعالة
+# 7. دالة الاستعلام عن النماذج الفعالة المعتمدة
 def fetch_active_models(key):
-    default_fallback = ['gemini-1.5-flash', 'gemini-2.0-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash']
+    preferred_order = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-1.5-pro']
     if not key:
-        return default_fallback
+        return preferred_order
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key.strip()}"
     try:
         r = requests.get(url, timeout=8)
         if r.status_code == 200:
             models_data = r.json().get('models', [])
             valid_models = [m['name'].replace('models/', '') for m in models_data if 'generateContent' in m.get('supportedGenerationMethods', [])]
-            preferred_order = ['gemini-1.5-flash', 'gemini-2.0-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro']
             ordered = [m for m in preferred_order if m in valid_models]
-            return ordered if ordered else default_fallback
+            return ordered if ordered else preferred_order
     except Exception:
         pass
-    return default_fallback
+    return preferred_order
 
 # 🔒 8. محرك المطابقة والمادة الاحتياطية (Strict Matcher & Fallback)
 def process_and_match_locally(raw_df, df_cat, df_syn, current_customer):
