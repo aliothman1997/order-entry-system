@@ -17,7 +17,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# تطبيق CSS مخصص للألوان الهادئة والتصميم المودرن
+# تطبيق CSS مخصص
 st.markdown("""
     <style>
     .main { background-color: #f8f9fa; }
@@ -50,6 +50,46 @@ st.markdown("""
 EXCEL_PATH = 'data.xlsx'
 KEY_FILE = 'api_key.txt'
 
+# 🔄 2. دالة المزامنة والحفظ التلقائي على GitHub
+def sync_excel_to_github(commit_message="تحديث بيانات النظام تلقائياً"):
+    token = st.secrets.get("GITHUB_TOKEN", os.getenv("GITHUB_TOKEN", ""))
+    repo = st.secrets.get("GITHUB_REPO", "aliothman1997/order-entry-system")
+    branch = "main"
+
+    if not token or not repo:
+        return False, "لم يتم ضبط GITHUB_TOKEN في Secrets."
+
+    url = f"https://api.github.com/repos/{repo}/contents/{EXCEL_PATH}"
+    headers = {
+        "Authorization": f"Bearer {token.strip()}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+
+    try:
+        # جلب الـ SHA الخاص بالملف الحالي من جيت هاب
+        get_res = requests.get(url, headers=headers, timeout=10)
+        sha = get_res.json().get("sha", "") if get_res.status_code == 200 else ""
+
+        # قراءة وتشفير الملف المحلي
+        with open(EXCEL_PATH, "rb") as f:
+            content_b64 = base64.b64encode(f.read()).decode('utf-8')
+
+        payload = {
+            "message": commit_message,
+            "content": content_b64,
+            "branch": branch
+        }
+        if sha:
+            payload["sha"] = sha
+
+        put_res = requests.put(url, headers=headers, json=payload, timeout=15)
+        if put_res.status_code in [200, 201]:
+            return True, "تم الحفظ وتزامن البيانات مع GitHub بنجاح!"
+        else:
+            return False, f"خطأ المزامنة ({put_res.status_code}): {put_res.text}"
+    except Exception as e:
+        return False, f"استثناء المزامنة: {str(e)}"
+
 # 🗝️ حفظ وقراءة مفتاح API محلياً
 def load_saved_api_key():
     if os.path.exists(KEY_FILE):
@@ -68,7 +108,7 @@ def save_api_key_locally(key_str):
     except Exception:
         return False
 
-# 🛠️ 2. تهيئة وتفقد شيتات الإكسيل التلقائية
+# 🛠️ 3. تهيئة وتفقد شيتات الإكسيل التلقائية
 def ensure_database_integrity():
     needed_sheets = {
         'Catalog': pd.DataFrame(columns=['Item_Code', 'System_Item_Name', 'Default_Unit']),
@@ -84,7 +124,7 @@ def ensure_database_integrity():
             for sheet, df in needed_sheets.items():
                 df.to_excel(writer, sheet_name=sheet, index=False)
     else:
-        xls = pd.ExcelFile(EXCEL_PATH)
+        xls = pd.ExcelFile(EXCEL_PATH, engine='openpyxl')
         existing_sheets = xls.sheet_names
         missing_sheets = {s: df for s, df in needed_sheets.items() if s not in existing_sheets}
         
@@ -95,10 +135,10 @@ def ensure_database_integrity():
 
 ensure_database_integrity()
 
-# 🔑 3. تحميل البيانات وإدارة الجلسات
-@st.cache_data(ttl=60)
+# 🔑 4. تحميل البيانات وإدارة الجلسات
+@st.cache_data(ttl=30)
 def load_all_data():
-    xls = pd.ExcelFile(EXCEL_PATH)
+    xls = pd.ExcelFile(EXCEL_PATH, engine='openpyxl')
     catalog = pd.read_excel(xls, sheet_name='Catalog')
     preferences = pd.read_excel(xls, sheet_name='Preferences')
     synonyms = pd.read_excel(xls, sheet_name='Synonyms')
@@ -116,7 +156,7 @@ if "current_user" not in st.session_state:
 if "user_role" not in st.session_state:
     st.session_state["user_role"] = ""
 
-# 🔑 4. واجهة تسجيل الدخول
+# 🔑 5. واجهة تسجيل الدخول
 if not st.session_state["authenticated"]:
     st.markdown("<h2 style='text-align:center;'>🔐 تسجيل الدخول للنظام</h2>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1, 1.5, 1])
@@ -138,7 +178,7 @@ if not st.session_state["authenticated"]:
                 st.error("❌ بيانات الدخول غير صحيحة.")
     st.stop()
 
-# 🕒 5. الشريط العلوي الديناميكي (Top Header)
+# 🕒 6. الشريط العلوي الديناميكي (Top Header)
 now_str = datetime.now().strftime("%Y-%m-%d | %I:%M:%S %p")
 st.markdown(f"""
     <div class="top-bar">
@@ -168,7 +208,7 @@ if st.sidebar.button("🚪 تسجيل الخروج"):
     st.session_state["authenticated"] = False
     st.rerun()
 
-# 6. دالة الاستعلام عن النماذج الفعالة
+# 7. دالة الاستعلام عن النماذج الفعالة
 def fetch_active_models(key):
     default_fallback = ['gemini-1.5-flash', 'gemini-2.0-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash']
     if not key:
@@ -186,7 +226,7 @@ def fetch_active_models(key):
         pass
     return default_fallback
 
-# 🔒 7. محرك المطابقة والمادة الاحتياطية (Strict Matcher & Fallback)
+# 🔒 8. محرك المطابقة والمادة الاحتياطية (Strict Matcher & Fallback)
 def process_and_match_locally(raw_df, df_cat, df_syn, current_customer):
     if raw_df.empty or df_cat.empty:
         return raw_df, []
@@ -281,7 +321,7 @@ def process_and_match_locally(raw_df, df_cat, df_syn, current_customer):
     raw_df['Notes'] = final_notes
     return raw_df, uncertain_questions
 
-# 📱 8. التبويبات الرئيسية للنظام
+# 📱 9. التبويبات الرئيسية للنظام
 customers_list = sorted(df_prefs['Customer_Name'].dropna().unique().tolist()) if not df_prefs.empty else ["عميل عام"]
 sys_catalog_names = sorted(df_catalog['System_Item_Name'].dropna().unique().tolist()) if not df_catalog.empty else []
 
@@ -310,8 +350,9 @@ with tab_order:
                     updated_prefs = pd.concat([df_prefs, new_p]).drop_duplicates(subset=['Customer_Name'], keep='last')
                     with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
                         updated_prefs.to_excel(writer, sheet_name='Preferences', index=False)
+                    sync_excel_to_github(f"إضافة زبون جديد: {new_cust_inp.strip()}")
                     st.cache_data.clear()
-                    st.success("✅ تم إدراج الزبون!")
+                    st.success("✅ تم إدراج الزبون وتحديث الذاكرة على GitHub!")
                     st.rerun()
 
     input_type = st.radio("طريقة الإدخال:", ["نص مباشر من الواتساب", "صورة الطلب"])
@@ -396,7 +437,7 @@ with tab_order:
                         st.session_state["last_result"] = df_result
                         st.session_state["last_questions"] = questions
                         
-                        # تسجيل الحركة في الـ Logs
+                        # تسجيل الحركة في الـ Logs وحفظها
                         log_entry = pd.DataFrame([{
                             'Timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             'Date': datetime.now().strftime("%Y-%m-%d"),
@@ -409,6 +450,7 @@ with tab_order:
                         with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
                             updated_logs.to_excel(writer, sheet_name='Logs', index=False)
                         
+                        sync_excel_to_github(f"تسجيل عملية طلبية جديدة لـ {selected_customer}")
                         st.success(f"✅ تم تحليل الفاتورة بنجاح بواسطة الموديل ({m_name})! (المجموع: {len(df_result)} صنف)")
                         success = True
                         break
@@ -455,8 +497,9 @@ with tab_order:
                         updated_syn = pd.concat([df_synonyms, new_r]).drop_duplicates(subset=['WhatsApp_Term', 'Customer_Name'], keep='last')
                         with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
                             updated_syn.to_excel(writer, sheet_name='Synonyms', index=False)
+                        sync_excel_to_github(f"تحديث ذاكرة لمادة {q['raw']}")
                         st.cache_data.clear()
-                        st.success(f"✅ تم حفظ القاعدة بنجاح!")
+                        st.success(f"✅ تم حفظ القاعدة وتزامنها مع GitHub بنجاح!")
                         st.rerun()
 
 # 🎓 التبويب الثاني: مركز التعلم والذاكرة
@@ -481,8 +524,9 @@ with tab_learn:
                 updated_syn = pd.concat([df_synonyms, new_rule]).drop_duplicates(subset=['WhatsApp_Term', 'Customer_Name'], keep='last')
                 with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
                     updated_syn.to_excel(writer, sheet_name='Synonyms', index=False)
+                sync_excel_to_github(f"إضافة توجيه سريع: {quick_wa.strip()}")
                 st.cache_data.clear()
-                st.success("✅ تم حفظ التوجيه في الذاكرة!")
+                st.success("✅ تم حفظ التوجيه وتزامنه دائمياً على GitHub!")
                 st.rerun()
 
     # 2. تصحيح إملاء / مطعم
@@ -505,6 +549,7 @@ with tab_learn:
                 updated_syn = pd.concat([df_synonyms, new_rule]).drop_duplicates(subset=['WhatsApp_Term', 'Customer_Name'], keep='last')
                 with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
                     updated_syn.to_excel(writer, sheet_name='Synonyms', index=False)
+                sync_excel_to_github(f"إضافة تفضيل خاص لـ {c_target}")
                 st.cache_data.clear()
                 st.success("✅ تم حفظ القاعدة بنجاح!")
                 st.rerun()
@@ -530,8 +575,9 @@ with tab_learn:
                 updated_cat = pd.concat([df_catalog, new_cat_row]).drop_duplicates(subset=['System_Item_Name'], keep='last')
                 with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
                     updated_cat.to_excel(writer, sheet_name='Catalog', index=False)
+                sync_excel_to_github(f"إضافة صنف جديد للكتالوج: {full_sys_item_name}")
                 st.cache_data.clear()
-                st.success(f"✅ تم إضافة الصنف: '{full_sys_item_name}' للكتالوج بنجاح!")
+                st.success(f"✅ تم إضافة الصنف '{full_sys_item_name}' وتحديث GitHub بنجاح!")
                 st.rerun()
 
     # 4. سجل القواعد والأمثلة
@@ -560,7 +606,7 @@ with tab_report:
     else:
         st.info("لا توجد طلبيات معالجة اليوم بعد.")
 
-# ⚙️ التبويب الرابع: لوحة تحكم الأدمن (خاصة بـ علي)
+# ⚙️ التبويب الرابع: لوحة تحكم الأدمن
 with tab_admin:
     if st.session_state["user_role"] != "Admin":
         st.warning("🔒 هذه اللوحة مخصصة للأدمن فقط.")
@@ -585,8 +631,9 @@ with tab_admin:
                     updated_u = pd.concat([df_users, new_u]).drop_duplicates(subset=['Username'], keep='last')
                     with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
                         updated_u.to_excel(writer, sheet_name='Users', index=False)
+                    sync_excel_to_github(f"إضافة مستخدم جديد: {u_name.strip()}")
                     st.cache_data.clear()
-                    st.success("✅ تم حفظ الحساب بنجاح!")
+                    st.success("✅ تم حفظ الحساب بنجاح وتزامنه دائمياً!")
                     st.rerun()
 
         st.markdown("---")
@@ -600,11 +647,12 @@ with tab_admin:
             df_users.loc[df_users['Username'] == user_to_toggle, 'Status'] = c_status
             with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
                 df_users.to_excel(writer, sheet_name='Users', index=False)
+            sync_excel_to_github(f"تغيير حالة حساب {user_to_toggle} إلى {c_status}")
             st.cache_data.clear()
-            st.success(f"✅ تم تغيير حالة حساب '{user_to_toggle}' إلى {c_status}!")
+            st.success(f"✅ تم تغيير حالة حساب '{user_to_toggle}' إلى {c_status} وتحديث GitHub!")
             st.rerun()
 
-# 9. التوقيع
+# 10. التوقيع
 st.markdown("""
     <div class="footer">
         Made with ❤️ by Ali Othman
