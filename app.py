@@ -201,6 +201,36 @@ def load_all_data():
 
 df_catalog, df_prefs, df_synonyms, df_examples, df_users, df_logs = load_all_data()
 
+# =========================================================================
+# 🔧 ترحيل تلقائي: لو الملف المسحوب من GitHub فيه كلمات مرور قديمة بنص
+# صريح (من قبل تفعيل الـ hashing)، حوّلها لـ hash مرة وحدة وخزّنها.
+# نتعرف على النص الصريح لأنه مو بطول 64 حرف hex متل sha256.
+# =========================================================================
+def migrate_plaintext_passwords_if_needed(users_df):
+    def is_sha256_hex(val):
+        val = str(val)
+        return len(val) == 64 and all(c in '0123456789abcdef' for c in val.lower())
+
+    needs_migration = False
+    new_passwords = []
+    for pw in users_df['Password'].astype(str):
+        if is_sha256_hex(pw):
+            new_passwords.append(pw)
+        else:
+            needs_migration = True
+            new_passwords.append(hash_password(pw))
+
+    if needs_migration:
+        users_df = users_df.copy()
+        users_df['Password'] = new_passwords
+        with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
+            users_df.to_excel(writer, sheet_name='Users', index=False)
+        sync_excel_to_github("ترحيل كلمات المرور القديمة إلى صيغة مشفرة (hash)")
+        st.cache_data.clear()
+    return users_df
+
+df_users = migrate_plaintext_passwords_if_needed(df_users)
+
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 if "current_user" not in st.session_state:
