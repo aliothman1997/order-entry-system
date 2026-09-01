@@ -285,24 +285,23 @@ if st.sidebar.button("🚪 تسجيل الخروج"):
     st.session_state["authenticated"] = False
     st.rerun()
 
-# 7. دالة الاستعلام عن النماذج الفعالة المعتمدة للفواتير فقط
+# 7. دالة الاستعلام عن النماذج الفعالة المعتمدة حصراً للفواتير
 def fetch_active_models(key):
-    # الأولويات المعتمدة والحديثة من Google
-    priority_models = [
+    # الموديلات الرسمية المعتمدة فقط
+    preferred = [
         'gemini-2.0-flash',
-        'gemini-2.5-flash',
         'gemini-1.5-flash-latest',
-        'gemini-1.5-flash-002',
-        'gemini-1.5-flash'
+        'gemini-1.5-flash',
+        'gemini-1.5-pro-latest'
     ]
     if not key:
-        return priority_models
+        return ['gemini-2.0-flash']
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key.strip()}"
     try:
-        r = requests.get(url, timeout=10)
+        r = requests.get(url, timeout=8)
         if r.status_code == 200:
             models_data = r.json().get('models', [])
-            valid_models = [
+            valid_from_api = [
                 m['name'].replace('models/', '') 
                 for m in models_data 
                 if 'generateContent' in m.get('supportedGenerationMethods', [])
@@ -311,12 +310,16 @@ def fetch_active_models(key):
                 and 'lite' not in m['name'].lower()
                 and '8b' not in m['name'].lower()
                 and 'embedding' not in m['name'].lower()
+                and 'tts' not in m['name'].lower()
+                and 'image' not in m['name'].lower()
+                and 'audio' not in m['name'].lower()
+                and 'computer-use' not in m['name'].lower()
             ]
-            ordered = [m for m in priority_models if m in valid_models]
-            return ordered if ordered else (valid_models if valid_models else priority_models)
+            ordered = [m for m in preferred if m in valid_from_api]
+            return ordered if ordered else (valid_from_api if valid_from_api else ['gemini-2.0-flash'])
     except Exception:
         pass
-    return priority_models
+    return ['gemini-2.0-flash']
 
 
 def term_matches(term: str, text: str) -> bool:
@@ -540,7 +543,7 @@ with tab_order:
                 candidate_models = fetch_active_models(clean_key)
 
                 success = False
-                last_debug_err = ""
+                errors_log = []
 
                 for m_name in candidate_models:
                     url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={clean_key}"
@@ -581,12 +584,12 @@ with tab_order:
                             success = True
                             break
                         else:
-                            last_debug_err = f"رمز الاستجابة ({res.status_code}) من الموديل {m_name}:\n{res.text}"
+                            errors_log.append(f"• الموديل {m_name} (رمز {res.status_code}): {res.text[:250]}")
                     except Exception as ex:
-                        last_debug_err = f"خطأ بالاتصال: {str(ex)}"
+                        errors_log.append(f"• الموديل {m_name}: {str(ex)}")
 
                 if not success:
-                    st.error(f"❌ تعذر تحليل الطلب. التفاصيل المباشرة للخطأ:\n\n```\n{last_debug_err}\n```")
+                    st.error(f"❌ تعذر تحليل الطلب. تفاصيل المحاولات:\n\n" + "\n".join(errors_log))
 
     if "last_result" in st.session_state:
         df_res = st.session_state["last_result"]
