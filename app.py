@@ -298,29 +298,33 @@ else:
 
 if st.sidebar.button("🚪 تسجيل الخروج"):
     st.session_state["authenticated"] = False
-    st.rerun()
+    st.rerun
 
-
+# 7. دالة الاستعلام عن النماذج الفعالة المعتمدة للفواتير فقط
 def fetch_active_models(key):
-    default_models = ['gemini-2.0-flash', 'gemini-1.5-flash']
+    # الموديلات المعتمدة والمضمونة لتحليل الفواتير
+    allowed_models = ['gemini-2.0-flash', 'gemini-1.5-flash']
     if not key:
-        return default_models
+        return allowed_models
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key.strip()}"
     try:
         r = requests.get(url, timeout=10)
         if r.status_code == 200:
             models_data = r.json().get('models', [])
             valid_models = [
-                m['name'].replace('models/', '')
-                for m in models_data
+                m['name'].replace('models/', '') 
+                for m in models_data 
                 if 'generateContent' in m.get('supportedGenerationMethods', [])
+                and m['name'].replace('models/', '').startswith('gemini-')
+                and 'research' not in m['name'].lower()
+                and 'lite' not in m['name'].lower()
+                and '8b' not in m['name'].lower()
             ]
-            full_models = [m for m in valid_models if 'lite' not in m.lower() and '8b' not in m.lower()]
-            ordered = [m for m in default_models if m in full_models]
-            return ordered if ordered else (full_models if full_models else default_models)
+            ordered = [m for m in allowed_models if m in valid_models]
+            return ordered if ordered else allowed_models
     except Exception:
         pass
-    return default_models
+    return allowed_models
 
 
 # =========================================================================
