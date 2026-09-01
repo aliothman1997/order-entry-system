@@ -167,6 +167,7 @@ def ensure_database_integrity():
                     df_def.to_excel(writer, sheet_name=sheet, index=False)
 
 
+# تشغيل المزامنة: اسحب من GitHub أولاً
 if "did_initial_pull" not in st.session_state:
     pulled, pull_msg = sync_excel_from_github()
     st.session_state["did_initial_pull"] = True
@@ -284,44 +285,44 @@ if st.sidebar.button("🚪 تسجيل الخروج"):
     st.session_state["authenticated"] = False
     st.rerun()
 
-# 7. دالة جلب الموديلات الفعالة والمحدثة
+# 7. دالة جلب النماذج الفعالة والمحدثة مع الفرز الذكي
 def fetch_active_models(key):
-    preferred = [
-        'gemini-3.6-flash',
-        'gemini-3.5-flash',
-        'gemini-3-flash-preview',
-        'gemini-2.5-flash'
-    ]
+    fallback_models = ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-2.5-flash']
     if not key:
-        return preferred
+        return fallback_models
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key.strip()}"
     try:
-        r = requests.get(url, timeout=8)
+        r = requests.get(url, timeout=6)
         if r.status_code == 200:
             models_data = r.json().get('models', [])
-            valid_from_api = [
-                m['name'].replace('models/', '') 
-                for m in models_data 
-                if 'generateContent' in m.get('supportedGenerationMethods', [])
-                and m['name'].replace('models/', '').startswith('gemini-')
-                and 'research' not in m['name'].lower()
-                and 'robotics' not in m['name'].lower()
-                and 'transcribe' not in m['name'].lower()
-                and 'lite' not in m['name'].lower()
-                and '8b' not in m['name'].lower()
-                and 'embedding' not in m['name'].lower()
-                and 'tts' not in m['name'].lower()
-                and 'image' not in m['name'].lower()
-                and 'audio' not in m['name'].lower()
-                and 'computer-use' not in m['name'].lower()
-            ]
-            ordered = [m for m in preferred if m in valid_from_api]
-            remaining_flash = [m for m in valid_from_api if m not in ordered and 'flash' in m.lower()]
-            final_list = ordered + remaining_flash
-            return final_list[:3] if final_list else preferred
+            candidates = []
+            for m in models_data:
+                m_name = m['name'].replace('models/', '')
+                methods = m.get('supportedGenerationMethods', [])
+                if 'generateContent' not in methods:
+                    continue
+                m_lower = m_name.lower()
+                bad_kws = ['research', 'robotics', 'transcribe', 'lite', '8b', 'embed', 'tts', 'image', 'audio', 'computer-use', 'customtools']
+                if any(bad in m_lower for bad in bad_kws):
+                    continue
+                if 'flash' in m_lower:
+                    candidates.append(m_name)
+            
+            if candidates:
+                def model_score(name):
+                    nl = name.lower()
+                    score = 0
+                    if '3.6' in nl: score += 100
+                    elif '3.5' in nl: score += 80
+                    elif '3' in nl: score += 60
+                    elif '2.5' in nl: score += 50
+                    elif '2.0' in nl: score += 40
+                    return score
+                candidates.sort(key=model_score, reverse=True)
+                return candidates[:3]
     except Exception:
         pass
-    return preferred
+    return fallback_models
 
 
 def term_matches(term: str, text: str) -> bool:
@@ -535,7 +536,7 @@ with tab_order:
                     mime_type = uploaded_image.type
                     contents_payload = [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": mime_type, "data": base64_image}}]}]
 
-                # تعطيل الـ thinking لتوليد النتيجة في ثانية واحدة وتجنب Timeout
+                # تفعيل response_mime_type وتعطيل التفكير الزائد لتوليد فوري
                 payload = {
                     "contents": contents_payload,
                     "generationConfig": {
@@ -555,10 +556,9 @@ with tab_order:
                 for m_name in candidate_models:
                     url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={clean_key}"
                     try:
-                        # مهلة كافية 60 ثانية
                         res = requests.post(url, headers=headers, json=payload, timeout=60)
                         
-                        # إذا كان الموديل لا يدعم thinkingConfig أعد المحاولة بدونه
+                        # دعم توافقي إن لم يدعم الموديل thinkingConfig
                         if res.status_code == 400 and "thinking" in res.text.lower():
                             fallback_payload = {
                                 "contents": contents_payload,
