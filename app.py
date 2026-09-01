@@ -284,10 +284,41 @@ if st.sidebar.button("🚪 تسجيل الخروج"):
     st.session_state["authenticated"] = False
     st.rerun()
 
-# 7. دالة الموديلات الثابتة والمضمونة حصراً
+# 7. دالة استعلام الموديلات الرسمية الحديثة المعتمدة
 def fetch_active_models(key):
-    # قائمة الموديلات المعتمدة حصراً لمنع استدعاء نماذج مفقودة أو تجريبية
-    return ['gemini-2.0-flash', 'gemini-1.5-flash-latest', 'gemini-1.5-flash']
+    # الموديلات الموصى بها رسمياً من Google
+    priority = ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview']
+    if not key:
+        return priority
+    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key.strip()}"
+    try:
+        r = requests.get(url, timeout=8)
+        if r.status_code == 200:
+            models_data = r.json().get('models', [])
+            valid_from_api = [
+                m['name'].replace('models/', '') 
+                for m in models_data 
+                if 'generateContent' in m.get('supportedGenerationMethods', [])
+                and m['name'].replace('models/', '').startswith('gemini-')
+                and 'research' not in m['name'].lower()
+                and 'robotics' not in m['name'].lower()
+                and 'transcribe' not in m['name'].lower()
+                and 'lite' not in m['name'].lower()
+                and '8b' not in m['name'].lower()
+                and 'embedding' not in m['name'].lower()
+                and 'tts' not in m['name'].lower()
+                and 'image' not in m['name'].lower()
+                and 'audio' not in m['name'].lower()
+                and 'computer-use' not in m['name'].lower()
+            ]
+            ordered = [m for m in priority if m in valid_from_api]
+            # نأخذ أولاً الموديلات المحدثة، ثم أي موديلات flash متاحة أخرى
+            remaining_flash = [m for m in valid_from_api if m not in ordered and 'flash' in m.lower()]
+            final_list = ordered + remaining_flash
+            return final_list[:3] if final_list else priority
+    except Exception:
+        pass
+    return priority
 
 
 def term_matches(term: str, text: str) -> bool:
@@ -501,7 +532,6 @@ with tab_order:
                     mime_type = uploaded_image.type
                     contents_payload = [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": mime_type, "data": base64_image}}]}]
 
-                # تفعيل response_mime_type لإجبار الموديل على إرجاع JSON سليم
                 payload = {
                     "contents": contents_payload,
                     "generationConfig": {
@@ -547,7 +577,7 @@ with tab_order:
                             break
                         elif res.status_code == 429:
                             errors_log.append(f"• الموديل {m_name}: تم بلوغ الحد الأقصى للطلبات بالدقيقة (429 Rate Limit)")
-                            time.sleep(1.5)  # انتظار خفيف لتخفيف الضغط
+                            time.sleep(1.5)
                         else:
                             errors_log.append(f"• الموديل {m_name} (رمز {res.status_code}): {res.text[:200]}")
                     except Exception as ex:
