@@ -284,12 +284,16 @@ if st.sidebar.button("🚪 تسجيل الخروج"):
     st.session_state["authenticated"] = False
     st.rerun()
 
-# 7. دالة استعلام الموديلات الرسمية الحديثة المعتمدة
+# 7. دالة جلب الموديلات الفعالة والمحدثة
 def fetch_active_models(key):
-    # الموديلات الموصى بها رسمياً من Google
-    priority = ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview']
+    preferred = [
+        'gemini-3.6-flash',
+        'gemini-3.5-flash',
+        'gemini-3-flash-preview',
+        'gemini-2.5-flash'
+    ]
     if not key:
-        return priority
+        return preferred
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key.strip()}"
     try:
         r = requests.get(url, timeout=8)
@@ -311,14 +315,13 @@ def fetch_active_models(key):
                 and 'audio' not in m['name'].lower()
                 and 'computer-use' not in m['name'].lower()
             ]
-            ordered = [m for m in priority if m in valid_from_api]
-            # نأخذ أولاً الموديلات المحدثة، ثم أي موديلات flash متاحة أخرى
+            ordered = [m for m in preferred if m in valid_from_api]
             remaining_flash = [m for m in valid_from_api if m not in ordered and 'flash' in m.lower()]
             final_list = ordered + remaining_flash
-            return final_list[:3] if final_list else priority
+            return final_list[:3] if final_list else preferred
     except Exception:
         pass
-    return priority
+    return preferred
 
 
 def term_matches(term: str, text: str) -> bool:
@@ -532,12 +535,16 @@ with tab_order:
                     mime_type = uploaded_image.type
                     contents_payload = [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": mime_type, "data": base64_image}}]}]
 
+                # تعطيل الـ thinking لتوليد النتيجة في ثانية واحدة وتجنب Timeout
                 payload = {
                     "contents": contents_payload,
                     "generationConfig": {
                         "maxOutputTokens": 8192,
                         "temperature": 0.0,
-                        "response_mime_type": "application/json"
+                        "response_mime_type": "application/json",
+                        "thinkingConfig": {
+                            "thinkingBudget": 0
+                        }
                     }
                 }
                 candidate_models = fetch_active_models(clean_key)
@@ -548,7 +555,21 @@ with tab_order:
                 for m_name in candidate_models:
                     url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={clean_key}"
                     try:
-                        res = requests.post(url, headers=headers, json=payload, timeout=30)
+                        # مهلة كافية 60 ثانية
+                        res = requests.post(url, headers=headers, json=payload, timeout=60)
+                        
+                        # إذا كان الموديل لا يدعم thinkingConfig أعد المحاولة بدونه
+                        if res.status_code == 400 and "thinking" in res.text.lower():
+                            fallback_payload = {
+                                "contents": contents_payload,
+                                "generationConfig": {
+                                    "maxOutputTokens": 8192,
+                                    "temperature": 0.0,
+                                    "response_mime_type": "application/json"
+                                }
+                            }
+                            res = requests.post(url, headers=headers, json=fallback_payload, timeout=60)
+
                         if res.status_code == 200:
                             res_text = res.json()['candidates'][0]['content']['parts'][0]['text']
                             parsed_list = json.loads(res_text.strip())
