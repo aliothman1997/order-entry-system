@@ -50,13 +50,7 @@ st.markdown("""
 EXCEL_PATH = 'data.xlsx'
 KEY_FILE = 'api_key.txt'
 
-# =========================================================================
-# 🔧 إصلاح رقم 1 (الأهم): المزامنة صارت باتجاهين — سحب (Pull) قبل أي شي،
-# ثم دفع (Push) بعد كل تعديل. هذا يمنع فقدان بياناتك عند كل إعادة تشغيل
-# لسيرفر Streamlit، لأن قبل هذا الإصلاح كان النظام يصنع ملف فاضي محلياً
-# كل ما يعيد التشغيل، بدون ما يرجع يجيب النسخة المحفوظة على GitHub.
-# =========================================================================
-
+# 🔄 المزامنة باتجاهين مع GitHub
 def get_github_config():
     token = st.secrets.get("GITHUB_TOKEN", os.getenv("GITHUB_TOKEN", ""))
     repo = st.secrets.get("GITHUB_REPO", "aliothman1997/order-entry-system")
@@ -64,7 +58,6 @@ def get_github_config():
 
 
 def sync_excel_from_github():
-    """يسحب أحدث نسخة محفوظة من GitHub قبل بدء التشغيل، حتى ما تضيع الذاكرة."""
     token, repo, branch = get_github_config()
     if not token or not repo:
         return False, "لم يتم ضبط GITHUB_TOKEN — سيعمل النظام بنسخة محلية فقط."
@@ -144,10 +137,6 @@ def save_api_key_locally(key_str):
         return False
 
 
-# =========================================================================
-# 🔧 إصلاح رقم 4: كلمات المرور صارت محفوظة كـ hash (SHA-256) مو نص صريح.
-# =========================================================================
-
 def hash_password(raw_password: str) -> str:
     return hashlib.sha256(raw_password.strip().encode("utf-8")).hexdigest()
 
@@ -178,7 +167,7 @@ def ensure_database_integrity():
                     df_def.to_excel(writer, sheet_name=sheet, index=False)
 
 
-# تشغيل المزامنة: اسحب من GitHub أولاً، بعدين تأكد من سلامة البنية
+# تشغيل المزامنة: اسحب من GitHub أولاً
 if "did_initial_pull" not in st.session_state:
     pulled, pull_msg = sync_excel_from_github()
     st.session_state["did_initial_pull"] = True
@@ -201,11 +190,7 @@ def load_all_data():
 
 df_catalog, df_prefs, df_synonyms, df_examples, df_users, df_logs = load_all_data()
 
-# =========================================================================
-# 🔧 ترحيل تلقائي: لو الملف المسحوب من GitHub فيه كلمات مرور قديمة بنص
-# صريح (من قبل تفعيل الـ hashing)، حوّلها لـ hash مرة وحدة وخزّنها.
-# نتعرف على النص الصريح لأنه مو بطول 64 حرف hex متل sha256.
-# =========================================================================
+
 def migrate_plaintext_passwords_if_needed(users_df):
     def is_sha256_hex(val):
         val = str(val)
@@ -298,14 +283,20 @@ else:
 
 if st.sidebar.button("🚪 تسجيل الخروج"):
     st.session_state["authenticated"] = False
-    st.rerun
+    st.rerun()
 
 # 7. دالة الاستعلام عن النماذج الفعالة المعتمدة للفواتير فقط
 def fetch_active_models(key):
-    # الموديلات المعتمدة والمضمونة لتحليل الفواتير
-    allowed_models = ['gemini-2.0-flash', 'gemini-1.5-flash']
+    # الأولويات المعتمدة والحديثة من Google
+    priority_models = [
+        'gemini-2.0-flash',
+        'gemini-2.5-flash',
+        'gemini-1.5-flash-latest',
+        'gemini-1.5-flash-002',
+        'gemini-1.5-flash'
+    ]
     if not key:
-        return allowed_models
+        return priority_models
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key.strip()}"
     try:
         r = requests.get(url, timeout=10)
@@ -319,25 +310,16 @@ def fetch_active_models(key):
                 and 'research' not in m['name'].lower()
                 and 'lite' not in m['name'].lower()
                 and '8b' not in m['name'].lower()
+                and 'embedding' not in m['name'].lower()
             ]
-            ordered = [m for m in allowed_models if m in valid_models]
-            return ordered if ordered else allowed_models
+            ordered = [m for m in priority_models if m in valid_models]
+            return ordered if ordered else (valid_models if valid_models else priority_models)
     except Exception:
         pass
-    return allowed_models
+    return priority_models
 
-
-# =========================================================================
-# 🔧 إصلاح رقم 2 و 3: مطابقة المترادفات صارت بحدود كلمة كاملة (word boundary)
-# بدل الـ substring المفتوح اللي كان يطابق "زيت" مع "زيت بروسر" غلط.
-# وشلت قاموس التوسيع العام (سمن/كيس/شوال) لأنه كان يسبب تطابقات خاطئة،
-# ورفعت عتبة التطابق من 0.40 إلى 0.55 لتقليل التخمين الغلط.
-# =========================================================================
 
 def term_matches(term: str, text: str) -> bool:
-    """مطابقة بحدود كلمة كاملة بدل substring خام."""
-    pattern = r'(?:^|[\s\u0600-\u06FF]*\b)' + re.escape(term) + r'(?:\b|[\s\u0600-\u06FF]*$)'
-    # مطابقة أبسط وأضمن: تحقق أن الكلمة موجودة كتوكن كامل أو أن النص كله يطابقها
     term_tokens = set(re.findall(r'[\u0600-\u06FFa-zA-Z0-9]+', term))
     text_tokens = set(re.findall(r'[\u0600-\u06FFa-zA-Z0-9]+', text))
     if not term_tokens:
@@ -382,20 +364,16 @@ def process_and_match_locally(raw_df, df_cat, df_syn, current_customer):
         matched_name = None
         note = "مكتمل"
 
-        # 1. الذاكرة المكتسبة — الآن بمطابقة توكنات كاملة، مو substring
         for rule in syn_rules:
             if term_matches(rule['term'], raw_lower):
                 matched_name = rule['target']
                 break
 
-        # 2. مطابقة مباشرة
         if not matched_name and raw_name in unit_map:
             matched_name = raw_name
 
-        # 3. مطابقة الكلمات (بدون قاموس توسيع عام مضلل)
         if not matched_name:
             raw_tokens = set(re.findall(r'[\u0600-\u06FFa-zA-Z0-9]+', raw_lower))
-
             best_match = None
             best_score = 0.0
 
