@@ -167,7 +167,6 @@ def ensure_database_integrity():
                     df_def.to_excel(writer, sheet_name=sheet, index=False)
 
 
-# تشغيل المزامنة: اسحب من GitHub أولاً
 if "did_initial_pull" not in st.session_state:
     pulled, pull_msg = sync_excel_from_github()
     st.session_state["did_initial_pull"] = True
@@ -285,41 +284,10 @@ if st.sidebar.button("🚪 تسجيل الخروج"):
     st.session_state["authenticated"] = False
     st.rerun()
 
-# 7. دالة الاستعلام عن النماذج الفعالة المعتمدة حصراً للفواتير
+# 7. دالة الموديلات الثابتة والمضمونة حصراً
 def fetch_active_models(key):
-    # الموديلات الرسمية المعتمدة فقط
-    preferred = [
-        'gemini-2.0-flash',
-        'gemini-1.5-flash-latest',
-        'gemini-1.5-flash',
-        'gemini-1.5-pro-latest'
-    ]
-    if not key:
-        return ['gemini-2.0-flash']
-    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key.strip()}"
-    try:
-        r = requests.get(url, timeout=8)
-        if r.status_code == 200:
-            models_data = r.json().get('models', [])
-            valid_from_api = [
-                m['name'].replace('models/', '') 
-                for m in models_data 
-                if 'generateContent' in m.get('supportedGenerationMethods', [])
-                and m['name'].replace('models/', '').startswith('gemini-')
-                and 'research' not in m['name'].lower()
-                and 'lite' not in m['name'].lower()
-                and '8b' not in m['name'].lower()
-                and 'embedding' not in m['name'].lower()
-                and 'tts' not in m['name'].lower()
-                and 'image' not in m['name'].lower()
-                and 'audio' not in m['name'].lower()
-                and 'computer-use' not in m['name'].lower()
-            ]
-            ordered = [m for m in preferred if m in valid_from_api]
-            return ordered if ordered else (valid_from_api if valid_from_api else ['gemini-2.0-flash'])
-    except Exception:
-        pass
-    return ['gemini-2.0-flash']
+    # قائمة الموديلات المعتمدة حصراً لمنع استدعاء نماذج مفقودة أو تجريبية
+    return ['gemini-2.0-flash', 'gemini-1.5-flash-latest', 'gemini-1.5-flash']
 
 
 def term_matches(term: str, text: str) -> bool:
@@ -519,7 +487,7 @@ with tab_order:
 1. قم بعدّ واستخرج **جميع الأصناف والبنود المذكورة بالكامل** من السطر الأول إلى السطر الأخير بدون حذف أو اختصار أي صنف.
 2. يمنع منعاً باتاً الاكتفاء بعدد محدد أو حذف أي مادة. إذا احتوت الرسالة على 15 مادة، يجب أن تكون النتيجة تحتوي على 15 عنصراً بالضبط.
 3. طابق الصنف مع الاسم الرسمي الكامل كما هو مسجل بالكتالوج شاملاً الأكواد والأقواس في نفس السطر تماماً.
-4. أخرج النتيجة **فقط** على شكل مصفوفة JSON محاطة بـ ```json و ```:
+4. أخرج النتيجة **فقط** على شكل مصفوفة JSON:
 [
   {{"System_Item_Name": "اسم المادة الكامل مع الكود بنفس السطر", "Quantity": 1, "Unit": "الوحدة"}}
 ]
@@ -533,11 +501,13 @@ with tab_order:
                     mime_type = uploaded_image.type
                     contents_payload = [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": mime_type, "data": base64_image}}]}]
 
+                # تفعيل response_mime_type لإجبار الموديل على إرجاع JSON سليم
                 payload = {
                     "contents": contents_payload,
                     "generationConfig": {
                         "maxOutputTokens": 8192,
-                        "temperature": 0.0
+                        "temperature": 0.0,
+                        "response_mime_type": "application/json"
                     }
                 }
                 candidate_models = fetch_active_models(clean_key)
@@ -548,18 +518,10 @@ with tab_order:
                 for m_name in candidate_models:
                     url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={clean_key}"
                     try:
-                        res = requests.post(url, headers=headers, json=payload, timeout=45)
+                        res = requests.post(url, headers=headers, json=payload, timeout=30)
                         if res.status_code == 200:
                             res_text = res.json()['candidates'][0]['content']['parts'][0]['text']
-
-                            if "```json" in res_text:
-                                json_data = res_text.split("```json")[1].split("```")[0].strip()
-                            elif "```" in res_text:
-                                json_data = res_text.split("```")[1].split("```")[0].strip()
-                            else:
-                                json_data = res_text.strip()
-
-                            parsed_list = json.loads(json_data)
+                            parsed_list = json.loads(res_text.strip())
                             df_raw = pd.DataFrame(parsed_list)
 
                             df_result, questions = process_and_match_locally(df_raw, df_catalog, df_synonyms, selected_customer)
@@ -583,13 +545,16 @@ with tab_order:
                             st.success(f"✅ تم تحليل الفاتورة بنجاح بواسطة الموديل ({m_name})! (المجموع: {len(df_result)} صنف)")
                             success = True
                             break
+                        elif res.status_code == 429:
+                            errors_log.append(f"• الموديل {m_name}: تم بلوغ الحد الأقصى للطلبات بالدقيقة (429 Rate Limit)")
+                            time.sleep(1.5)  # انتظار خفيف لتخفيف الضغط
                         else:
-                            errors_log.append(f"• الموديل {m_name} (رمز {res.status_code}): {res.text[:250]}")
+                            errors_log.append(f"• الموديل {m_name} (رمز {res.status_code}): {res.text[:200]}")
                     except Exception as ex:
                         errors_log.append(f"• الموديل {m_name}: {str(ex)}")
 
                 if not success:
-                    st.error(f"❌ تعذر تحليل الطلب. تفاصيل المحاولات:\n\n" + "\n".join(errors_log))
+                    st.error(f"❌ تعذر تحليل الطلب:\n\n" + "\n".join(errors_log))
 
     if "last_result" in st.session_state:
         df_res = st.session_state["last_result"]
