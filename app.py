@@ -8,6 +8,7 @@ import time
 import re
 import os
 import hashlib
+import zipfile
 from datetime import datetime
 
 # 1. إعداد الصفحة والتصميم العصري
@@ -72,6 +73,14 @@ def sync_excel_from_github():
         if res.status_code == 200:
             content_b64 = res.json().get("content", "")
             file_bytes = base64.b64decode(content_b64)
+            # فحص سلامة الملف قبل الكتابة لتفادي تخزين ملف معطوب
+            try:
+                with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
+                    if zf.testzip() is not None:
+                        return False, "الملف على GitHub تالف، سيتم إعادة بنائه محلياً."
+            except Exception:
+                return False, "الملف المسحوب غير صالح كأرشيف إكسيل."
+
             with open(EXCEL_PATH, "wb") as f:
                 f.write(file_bytes)
             return True, "تم سحب أحدث نسخة من GitHub بنجاح."
@@ -141,9 +150,8 @@ def hash_password(raw_password: str) -> str:
     return hashlib.sha256(raw_password.strip().encode("utf-8")).hexdigest()
 
 
-# 🛠️ تهيئة وتفقد شيتات الإكسيل التلقائية
-def ensure_database_integrity():
-    needed_sheets = {
+def get_default_database_dict():
+    return {
         'Catalog': pd.DataFrame(columns=['Item_Code', 'System_Item_Name', 'Default_Unit']),
         'Preferences': pd.DataFrame(columns=['Customer_Name', 'Mapped_System_Item']),
         'Synonyms': pd.DataFrame(columns=['WhatsApp_Term', 'System_Item_Name', 'Customer_Name', 'Rule_Type']),
@@ -152,19 +160,53 @@ def ensure_database_integrity():
         'Logs': pd.DataFrame(columns=['Timestamp', 'Date', 'Username', 'Customer_Name', 'Items_Count', 'Status'])
     }
 
-    if not os.path.exists(EXCEL_PATH):
-        with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl') as writer:
-            for sheet, df in needed_sheets.items():
-                df.to_excel(writer, sheet_name=sheet, index=False)
-    else:
-        xls = pd.ExcelFile(EXCEL_PATH, engine='openpyxl')
-        existing_sheets = xls.sheet_names
-        missing_sheets = {s: df for s, df in needed_sheets.items() if s not in existing_sheets}
 
-        if missing_sheets:
-            with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
-                for sheet, df_def in missing_sheets.items():
-                    df_def.to_excel(writer, sheet_name=sheet, index=False)
+# 🛡️ دالة الحفظ الآمنة: تقرأ وتكتب بنمط 'w' لتفادي تلف ملفات الـ zip نهائياً
+def safe_save_sheet(sheet_name: str, new_df: pd.DataFrame):
+    sheets_data = {}
+    default_db = get_default_database_dict()
+
+    if os.path.exists(EXCEL_PATH):
+        try:
+            xls = pd.ExcelFile(EXCEL_PATH, engine='openpyxl')
+            for s in xls.sheet_names:
+                sheets_data[s] = pd.read_excel(xls, sheet_name=s)
+        except Exception:
+            sheets_data = default_db.copy()
+    else:
+        sheets_data = default_db.copy()
+
+    sheets_data[sheet_name] = new_df
+
+    with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='w') as writer:
+        for s_name, s_df in sheets_data.items():
+            s_df.to_excel(writer, sheet_name=s_name, index=False)
+
+
+# 🛠️ تهيئة وتفقد شيتات الإكسيل التلقائية
+def ensure_database_integrity():
+    default_db = get_default_database_dict()
+    is_corrupt = False
+
+    if os.path.exists(EXCEL_PATH):
+        try:
+            with zipfile.ZipFile(EXCEL_PATH) as zf:
+                if zf.testzip() is not None:
+                    is_corrupt = True
+            if not is_corrupt:
+                xls = pd.ExcelFile(EXCEL_PATH, engine='openpyxl')
+                existing_sheets = xls.sheet_names
+                missing = {s: df for s, df in default_db.items() if s not in existing_sheets}
+                if missing:
+                    for s, df in missing.items():
+                        safe_save_sheet(s, df)
+        except Exception:
+            is_corrupt = True
+
+    if is_corrupt or not os.path.exists(EXCEL_PATH):
+        with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='w') as writer:
+            for sheet, df in default_db.items():
+                df.to_excel(writer, sheet_name=sheet, index=False)
 
 
 # تشغيل المزامنة: اسحب من GitHub أولاً
@@ -178,14 +220,24 @@ ensure_database_integrity()
 
 @st.cache_data(ttl=30)
 def load_all_data():
-    xls = pd.ExcelFile(EXCEL_PATH, engine='openpyxl')
-    catalog = pd.read_excel(xls, sheet_name='Catalog')
-    preferences = pd.read_excel(xls, sheet_name='Preferences')
-    synonyms = pd.read_excel(xls, sheet_name='Synonyms')
-    examples = pd.read_excel(xls, sheet_name='Examples')
-    users = pd.read_excel(xls, sheet_name='Users')
-    logs = pd.read_excel(xls, sheet_name='Logs')
-    return catalog, preferences, synonyms, examples, users, logs
+    try:
+        xls = pd.ExcelFile(EXCEL_PATH, engine='openpyxl')
+        catalog = pd.read_excel(xls, sheet_name='Catalog')
+        preferences = pd.read_excel(xls, sheet_name='Preferences')
+        synonyms = pd.read_excel(xls, sheet_name='Synonyms')
+        examples = pd.read_excel(xls, sheet_name='Examples')
+        users = pd.read_excel(xls, sheet_name='Users')
+        logs = pd.read_excel(xls, sheet_name='Logs')
+        return catalog, preferences, synonyms, examples, users, logs
+    except Exception:
+        ensure_database_integrity()
+        xls = pd.ExcelFile(EXCEL_PATH, engine='openpyxl')
+        return (pd.read_excel(xls, sheet_name='Catalog'),
+                pd.read_excel(xls, sheet_name='Preferences'),
+                pd.read_excel(xls, sheet_name='Synonyms'),
+                pd.read_excel(xls, sheet_name='Examples'),
+                pd.read_excel(xls, sheet_name='Users'),
+                pd.read_excel(xls, sheet_name='Logs'))
 
 
 df_catalog, df_prefs, df_synonyms, df_examples, df_users, df_logs = load_all_data()
@@ -208,8 +260,7 @@ def migrate_plaintext_passwords_if_needed(users_df):
     if needs_migration:
         users_df = users_df.copy()
         users_df['Password'] = new_passwords
-        with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-            users_df.to_excel(writer, sheet_name='Users', index=False)
+        safe_save_sheet('Users', users_df)
         sync_excel_to_github("ترحيل كلمات المرور القديمة إلى صيغة مشفرة (hash)")
         st.cache_data.clear()
     return users_df
@@ -454,8 +505,7 @@ with tab_order:
                 if new_cust_inp:
                     new_p = pd.DataFrame([{'Customer_Name': new_cust_inp.strip(), 'Mapped_System_Item': ''}])
                     updated_prefs = pd.concat([df_prefs, new_p]).drop_duplicates(subset=['Customer_Name'], keep='last')
-                    with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-                        updated_prefs.to_excel(writer, sheet_name='Preferences', index=False)
+                    safe_save_sheet('Preferences', updated_prefs)
                     sync_excel_to_github(f"إضافة زبون جديد: {new_cust_inp.strip()}")
                     st.cache_data.clear()
                     st.success("✅ تم إدراج الزبون وتحديث الذاكرة على GitHub!")
@@ -536,7 +586,6 @@ with tab_order:
                     mime_type = uploaded_image.type
                     contents_payload = [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": mime_type, "data": base64_image}}]}]
 
-                # تفعيل response_mime_type وتعطيل التفكير الزائد لتوليد فوري
                 payload = {
                     "contents": contents_payload,
                     "generationConfig": {
@@ -558,7 +607,6 @@ with tab_order:
                     try:
                         res = requests.post(url, headers=headers, json=payload, timeout=60)
                         
-                        # دعم توافقي إن لم يدعم الموديل thinkingConfig
                         if res.status_code == 400 and "thinking" in res.text.lower():
                             fallback_payload = {
                                 "contents": contents_payload,
@@ -589,8 +637,7 @@ with tab_order:
                                 'Status': 'Success'
                             }])
                             updated_logs = pd.concat([df_logs, log_entry])
-                            with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-                                updated_logs.to_excel(writer, sheet_name='Logs', index=False)
+                            safe_save_sheet('Logs', updated_logs)
 
                             sync_excel_to_github(f"تسجيل عملية طلبية جديدة لـ {selected_customer}")
                             st.success(f"✅ تم تحليل الفاتورة بنجاح بواسطة الموديل ({m_name})! (المجموع: {len(df_result)} صنف)")
@@ -663,8 +710,7 @@ with tab_order:
                             'Rule_Type': 'توجيه أسئلة النظام'
                         }])
                         updated_syn = pd.concat([df_synonyms, new_r]).drop_duplicates(subset=['WhatsApp_Term', 'Customer_Name'], keep='last')
-                        with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-                            updated_syn.to_excel(writer, sheet_name='Synonyms', index=False)
+                        safe_save_sheet('Synonyms', updated_syn)
                         sync_excel_to_github(f"تحديث ذاكرة لمادة {q['raw']}")
                         st.cache_data.clear()
                         st.success(f"✅ تم حفظ القاعدة وتزامنها مع GitHub بنجاح!")
@@ -701,8 +747,7 @@ with tab_learn:
                     'Rule_Type': 'توجيه سريع'
                 }])
                 updated_syn = pd.concat([df_synonyms, new_rule]).drop_duplicates(subset=['WhatsApp_Term', 'Customer_Name'], keep='last')
-                with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-                    updated_syn.to_excel(writer, sheet_name='Synonyms', index=False)
+                safe_save_sheet('Synonyms', updated_syn)
                 sync_excel_to_github(f"إضافة توجيه سريع لـ {quick_target}: {quick_wa.strip()}")
                 st.cache_data.clear()
                 st.success(f"✅ تم حفظ التوجيه لـ ({quick_target}) وتزامنه دائمياً على GitHub!")
@@ -725,8 +770,7 @@ with tab_learn:
                     'Rule_Type': 'تفضيل خاص'
                 }])
                 updated_syn = pd.concat([df_synonyms, new_rule]).drop_duplicates(subset=['WhatsApp_Term', 'Customer_Name'], keep='last')
-                with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-                    updated_syn.to_excel(writer, sheet_name='Synonyms', index=False)
+                safe_save_sheet('Synonyms', updated_syn)
                 sync_excel_to_github(f"إضافة تفضيل خاص لـ {c_target}")
                 st.cache_data.clear()
                 st.success("✅ تم حفظ القاعدة بنجاح!")
@@ -787,8 +831,7 @@ with tab_learn:
                 }])
 
                 updated_examples = pd.concat([df_examples, new_example]).reset_index(drop=True)
-                with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-                    updated_examples.to_excel(writer, sheet_name='Examples', index=False)
+                safe_save_sheet('Examples', updated_examples)
 
                 sync_excel_to_github(f"إضافة مثال فاتورة كاملة لـ {st.session_state['preview_cust']}")
                 st.cache_data.clear()
@@ -819,8 +862,7 @@ with tab_learn:
                     'Default_Unit': n_unit.strip() if n_unit else 'قطعة'
                 }])
                 updated_cat = pd.concat([df_catalog, new_cat_row]).drop_duplicates(subset=['System_Item_Name'], keep='last')
-                with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-                    updated_cat.to_excel(writer, sheet_name='Catalog', index=False)
+                safe_save_sheet('Catalog', updated_cat)
                 sync_excel_to_github(f"إضافة صنف جديد للكتالوج: {full_sys_item_name}")
                 st.cache_data.clear()
                 st.success(f"✅ تم إضافة الصنف '{full_sys_item_name}' وتحديث GitHub بنجاح!")
@@ -885,9 +927,7 @@ if tab_admin is not None:
 
             if st.button("❌ حذف مثال الفاتورة المحدد نهائياً"):
                 updated_examples = df_examples.drop(index=selected_ex_idx).reset_index(drop=True)
-                with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-                    updated_examples.to_excel(writer, sheet_name='Examples', index=False)
-
+                safe_save_sheet('Examples', updated_examples)
                 sync_excel_to_github(f"حذف مثال فاتورة رقم {selected_ex_idx+1}")
                 st.cache_data.clear()
                 st.success("✅ تم حذف الفاتورة الخاطئة وتحديث الذاكرة على GitHub بنجاح!")
@@ -917,9 +957,7 @@ if tab_admin is not None:
 
             if st.button("❌ حذف القاعدة المحفوظة"):
                 updated_syn = df_synonyms.drop(index=selected_syn_idx).reset_index(drop=True)
-                with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-                    updated_syn.to_excel(writer, sheet_name='Synonyms', index=False)
-
+                safe_save_sheet('Synonyms', updated_syn)
                 sync_excel_to_github(f"حذف قاعدة قاموس رقم {selected_syn_idx+1}")
                 st.cache_data.clear()
                 st.success("✅ تم حذف القاعدة الخاطئة بنجاح!")
@@ -945,8 +983,7 @@ if tab_admin is not None:
                 else:
                     new_u = pd.DataFrame([{'Username': u_name.strip(), 'Password': hash_password(u_pass), 'Role': u_role, 'Status': 'Active'}])
                     updated_u = pd.concat([df_users, new_u]).drop_duplicates(subset=['Username'], keep='last')
-                    with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-                        updated_u.to_excel(writer, sheet_name='Users', index=False)
+                    safe_save_sheet('Users', updated_u)
                     sync_excel_to_github(f"إضافة مستخدم جديد: {u_name.strip()}")
                     st.cache_data.clear()
                     st.success("✅ تم حفظ الحساب بنجاح وتزامنه دائمياً!")
@@ -961,8 +998,7 @@ if tab_admin is not None:
         c_status = st.radio("حالة الحساب:", ["Active", "Disabled"])
         if st.button("حفظ تغيير حالة الحساب"):
             df_users.loc[df_users['Username'] == user_to_toggle, 'Status'] = c_status
-            with pd.ExcelWriter(EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-                df_users.to_excel(writer, sheet_name='Users', index=False)
+            safe_save_sheet('Users', df_users)
             sync_excel_to_github(f"تغيير حالة حساب {user_to_toggle} إلى {c_status}")
             st.cache_data.clear()
             st.success(f"✅ تم تغيير حالة حساب '{user_to_toggle}' إلى {c_status} وتحديث GitHub!")
